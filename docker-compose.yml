@@ -1,0 +1,71 @@
+name: container2wasm-rust-demo
+
+services:
+  assets:
+    image: node:22-alpine
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command:
+      - /bin/sh
+      - -c
+      - npm install --no-audit --no-fund --package-lock=false && npm run build
+
+  builder:
+    platform: linux/amd64
+    depends_on:
+      assets:
+        condition: service_completed_successfully
+    build:
+      context: .
+      dockerfile: Dockerfile.c2w-builder
+      args:
+        C2W_VERSION: ${C2W_VERSION:-v0.8.4}
+    environment:
+      SOURCE: /workspace/src
+      DEST: /workspace/docs/containers
+      DOCS_SRC_DIR: /workspace/docs/src
+      IMAGES: amd64-debian-wasi
+      WASI_MAX_CHUNK: ${WASI_MAX_CHUNK:-47MB}
+      FORCE_REBUILD: ${FORCE_REBUILD:-0}
+      CLEAN_REMOVED_IMAGES: "1"
+      DOCKER_BUILDKIT: "1"
+      DOCKER_SAVE_PLATFORM_COMPAT: ${DOCKER_SAVE_PLATFORM_COMPAT:-auto}
+      C2W_EXTRA_FLAGS: ${C2W_EXTRA_FLAGS:-}
+      C2W_BUILDX_BUILDER_NAME: ${C2W_BUILDX_BUILDER_NAME:-c2w-large}
+      C2W_BUILDX_MEMORY: ${C2W_BUILDX_MEMORY:-24g}
+      C2W_BUILDX_MEMORY_SWAP: ${C2W_BUILDX_MEMORY_SWAP:-32g}
+      C2W_BUILDX_RECREATE: ${C2W_BUILDX_RECREATE:-0}
+    volumes:
+      - .:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /workspace
+    command: ["./create-images.sh"]
+
+  runner:
+    image: httpd:2.4-alpine
+    depends_on:
+      builder:
+        condition: service_completed_successfully
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - ./docs:/usr/local/apache2/htdocs:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        sed -i 's/^#\(LoadModule headers_module modules\/mod_headers.so\)/\1/' /usr/local/apache2/conf/httpd.conf
+        cat > /usr/local/apache2/conf/extra/container2wasm.conf <<'EOF'
+        AddType application/wasm .wasm
+        <IfModule headers_module>
+            Header always set Cross-Origin-Opener-Policy "same-origin"
+            Header always set Cross-Origin-Embedder-Policy "credentialless"
+            Header always set Cross-Origin-Resource-Policy "cross-origin"
+        </IfModule>
+        EOF
+        if ! grep -q 'container2wasm.conf' /usr/local/apache2/conf/httpd.conf; then
+          echo 'Include conf/extra/container2wasm.conf' >> /usr/local/apache2/conf/httpd.conf
+        fi
+        httpd-foreground

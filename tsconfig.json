@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "none",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "rootDir": "docs/ts",
+    "outDir": "docs/dist",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmitOnError": true,
+    "removeComments": false
+  },
+  "include": ["docs/ts/**/*.ts", "docs/ts/**/*.d.ts"]
+}

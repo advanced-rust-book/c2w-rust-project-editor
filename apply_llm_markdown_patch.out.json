@@ -1,0 +1,18 @@
+{
+  "input": "out.md",
+  "processed_count": 7,
+  "written_count": 7,
+  "already_applied_count": 0,
+  "failed_count": 0,
+  "written": [
+    "components/rust-code-editor.tsx",
+    "components/rust-editor/c2w-rust-project-editor.tsx",
+    "components/rust-editor/index.tsx",
+    "docs/ts/amd64-debian-wasi.ts",
+    "docs/index.html",
+    "docker-compose.yml",
+    "explainer.md"
+  ],
+  "already_applied": [],
+  "failed": []
+}

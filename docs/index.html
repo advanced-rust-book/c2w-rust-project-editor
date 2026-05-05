@@ -1,0 +1,1065 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>C2W Rust project editor library demo</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-soft: #eef3f8;
+      --surface-strong: #e3ebf3;
+      --ink: #17202a;
+      --muted: #64748b;
+      --border: #cbd5e1;
+      --primary: #0f766e;
+      --primary-strong: #0d5f59;
+      --primary-ink: #f8fffe;
+      --accent: #2563eb;
+      --warn: #b45309;
+      --bad: #b91c1c;
+      --good: #047857;
+      --editor-bg: #111318;
+      --editor-rail: #20232b;
+      --editor-header: #292b31;
+      --editor-border: #3f424c;
+      --editor-ink: #f2f4f8;
+      --editor-muted: #9ca3af;
+      --terminal: #07090d;
+      --terminal-ink: #dbe4ef;
+      --shadow: 0 16px 42px rgba(31, 41, 55, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    code,
+    pre,
+    textarea,
+    input {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    .workspace {
+      width: min(1480px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 18px 0 40px;
+    }
+
+    .app-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 520px);
+      gap: 16px;
+      align-items: stretch;
+      margin-bottom: 16px;
+    }
+
+    .app-title,
+    .status-strip,
+    .terminal-panel,
+    .log-panel {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .app-title {
+      padding: 18px;
+    }
+
+    .app-title h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.16;
+      letter-spacing: 0;
+    }
+
+    .app-title p {
+      max-width: 900px;
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .status-strip {
+      display: grid;
+      gap: 8px;
+      padding: 14px;
+      align-content: center;
+    }
+
+    .status-line {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface-soft);
+      padding: 9px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .editor-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      align-items: start;
+    }
+
+    .library-note,
+    .editor-demo-shell {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .library-note {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding: 16px;
+    }
+
+    .library-note h2 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .library-note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .library-note pre {
+      overflow: auto;
+      margin: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #111827;
+      color: #dbe4ef;
+      padding: 12px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .editor-demo-shell {
+      display: grid;
+      gap: 14px;
+      padding: 14px;
+      color: var(--ink);
+    }
+
+    .editor-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+    }
+
+    .editor-toolbar-title {
+      display: grid;
+      gap: 2px;
+    }
+
+    .editor-toolbar-title strong {
+      color: var(--ink);
+      font-size: 14px;
+    }
+
+    .editor-toolbar-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .editor-theme-toggle {
+      display: inline-flex;
+      gap: 4px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface-soft);
+      padding: 3px;
+    }
+
+    .editor-theme-toggle button {
+      appearance: none;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .editor-theme-toggle button[aria-pressed="true"] {
+      background: var(--primary);
+      color: var(--primary-ink);
+    }
+
+    .editor-demo-shell.editor-theme-night {
+      --surface: #17181d;
+      --surface-soft: #202127;
+      --surface-strong: #2b2d34;
+      --ink: #f4f4f5;
+      --muted: #c4c7cf;
+      --border: #3d3f46;
+      --editor-bg: #111318;
+      --editor-rail: #20232b;
+      --editor-header: #292b31;
+      --editor-border: #3f424c;
+      --editor-ink: #f2f4f8;
+      --editor-muted: #9ca3af;
+    }
+
+    .editor-demo-shell.editor-theme-day {
+      --surface: #ffffff;
+      --surface-soft: #eef3f8;
+      --surface-strong: #dce7f2;
+      --ink: #17202a;
+      --muted: #64748b;
+      --border: #cbd5e1;
+      --editor-bg: #f8fafc;
+      --editor-rail: #e7edf5;
+      --editor-header: #eef3f8;
+      --editor-border: #c5cfdb;
+      --editor-ink: #17202a;
+      --editor-muted: #64748b;
+    }
+
+    .editor-theme-day .c2w-source {
+      caret-color: #111827;
+    }
+
+    .editor-theme-day .c2w-tabs {
+      background: #e7edf5;
+    }
+
+    .editor-theme-day .c2w-tab {
+      border-color: #b8c4d2;
+      background: #ffffff;
+      color: #233144;
+    }
+
+    .editor-theme-day .c2w-tab.active {
+      border-color: #0f766e;
+      background: #d8f3ee;
+      color: #0f3f3a;
+    }
+
+    .editor-theme-day .c2w-tab.terminal {
+      border-color: rgba(37, 99, 235, 0.44);
+      color: #1d4ed8;
+    }
+
+    .editor-theme-day .c2w-run-output,
+    .editor-theme-day .c2w-event-log {
+      background: #f8fafc;
+      color: #1f2937;
+    }
+
+    .editor-theme-day .tok-comment {
+      color: #047857;
+    }
+
+    .editor-theme-day .tok-string,
+    .editor-theme-day .tok-attribute {
+      color: #b45309;
+    }
+
+    .editor-theme-day .tok-macro {
+      color: #7c3aed;
+    }
+
+    .editor-theme-day .tok-keyword {
+      color: #be185d;
+    }
+
+    .editor-theme-day .tok-type {
+      color: #0369a1;
+    }
+
+    .editor-theme-day .tok-number {
+      color: #c2410c;
+    }
+
+    .runtime-hidden {
+      position: absolute;
+      left: -10000px;
+      top: 0;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+
+    .runtime-grid {
+      display: grid;
+      grid-template-columns: minmax(420px, 0.95fr) minmax(0, 1.05fr);
+      gap: 16px;
+      align-items: stretch;
+      margin-top: 16px;
+    }
+
+    .terminal-panel,
+    .log-panel {
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-soft);
+      padding: 12px 14px;
+    }
+
+    .panel-title {
+      display: grid;
+      gap: 2px;
+    }
+
+    .panel-title strong {
+      font-size: 14px;
+    }
+
+    .panel-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .panel-body {
+      padding: 14px;
+    }
+
+    .button {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      min-height: 34px;
+      padding: 7px 11px;
+      background: var(--primary);
+      color: var(--primary-ink);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+    }
+
+    .button:hover {
+      background: var(--primary-strong);
+    }
+
+    .button.secondary {
+      border-color: var(--border);
+      background: var(--surface);
+      color: var(--ink);
+    }
+
+    .button.secondary:hover {
+      background: var(--surface-strong);
+    }
+
+    .button:disabled,
+    .c2w-icon-button:disabled,
+    .c2w-tab:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .terminal-shell {
+      overflow: hidden;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      background: var(--terminal);
+    }
+
+    .terminal-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid #263244;
+      padding: 9px 11px;
+      background: #111827;
+      color: #cbd5e1;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    #terminal-amd64-debian {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 390px;
+      padding: 8px;
+      background: var(--terminal);
+    }
+
+    .terminal-hidden {
+      display: none;
+    }
+
+    .terminal-shell.c2w-terminal-undocked {
+      display: none;
+    }
+
+    .terminal-shell.c2w-terminal-undocked + .terminal-send {
+      display: none;
+    }
+
+    .terminal-send,
+    .mount-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .terminal-send input,
+    .field input {
+      min-width: 0;
+      flex: 1;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
+    .field {
+      display: grid;
+      gap: 5px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .output-log {
+      min-height: 536px;
+      max-height: 536px;
+      overflow: auto;
+      margin: 0;
+      border: 0;
+      background: #111827;
+      color: #dbe4ef;
+      padding: 14px;
+      white-space: pre-wrap;
+      line-height: 1.55;
+      font-size: 12px;
+    }
+
+    .text-muted {
+      color: var(--muted);
+    }
+
+    .text-danger {
+      color: var(--bad);
+      font-weight: 700;
+    }
+
+    .c2w-editor-card {
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .c2w-editor-card:focus-within {
+      border-color: rgba(15, 118, 110, 0.72);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16), var(--shadow);
+    }
+
+    .c2w-editor-intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+      gap: 14px;
+      align-items: start;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-soft);
+      padding: 14px;
+    }
+
+    .c2w-editor-copy h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .c2w-editor-copy p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .c2w-editor-dir {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .c2w-editor-dir input {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+
+    .c2w-code-frame {
+      background: var(--editor-bg);
+    }
+
+    .c2w-code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 54px;
+      border-bottom: 1px solid var(--editor-border);
+      background: var(--editor-header);
+      padding: 10px 12px;
+    }
+
+    .c2w-code-header-left,
+    .c2w-code-actions,
+    .c2w-window-dots {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .c2w-code-actions {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .c2w-window-dots i {
+      display: block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .dot-red {
+      background: #ff4d4d;
+    }
+
+    .dot-yellow {
+      background: #f4bd16;
+    }
+
+    .dot-green {
+      background: #00c875;
+    }
+
+    .c2w-code-path {
+      overflow: hidden;
+      color: var(--editor-muted);
+      font-size: 13px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .c2w-code-badge {
+      flex: none;
+      border-radius: 5px;
+      background: #4b5563;
+      color: #d1d5db;
+      padding: 3px 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .c2w-code-badge.restorable {
+      background: rgba(180, 83, 9, 0.22);
+      color: #fbbf24;
+    }
+
+    .c2w-code-badge.unsynced {
+      background: rgba(14, 116, 144, 0.24);
+      color: #67e8f9;
+    }
+
+    .c2w-icon-button {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 6px;
+      min-height: 32px;
+      padding: 6px 9px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #e5e7eb;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .c2w-button-icon {
+      width: 15px;
+      height: 15px;
+      fill: none;
+      flex: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 2;
+    }
+
+    .c2w-icon-button.compact {
+      min-height: 30px;
+      padding: 5px 8px;
+    }
+
+    .c2w-icon-button:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    .c2w-icon-button.primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: var(--primary-ink);
+      min-width: 58px;
+    }
+
+    .c2w-icon-button.primary:hover {
+      background: var(--primary-strong);
+    }
+
+    .c2w-tabs {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      border-bottom: 1px solid var(--editor-border);
+      background: #181a20;
+      padding: 8px 10px;
+    }
+
+    .c2w-tab {
+      appearance: none;
+      flex: none;
+      border: 1px solid #3f424c;
+      border-radius: 6px;
+      background: #23262d;
+      color: #cbd5e1;
+      cursor: pointer;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .c2w-tab.active {
+      border-color: #5eead4;
+      background: rgba(15, 118, 110, 0.38);
+      color: #f0fdfa;
+    }
+
+    .c2w-tab.restorable:not(.active) {
+      border-color: rgba(245, 158, 11, 0.72);
+      color: #fde68a;
+    }
+
+    .c2w-tab.unsynced {
+      border-color: rgba(34, 211, 238, 0.78);
+      box-shadow: inset 0 -2px 0 rgba(34, 211, 238, 0.42);
+    }
+
+    .c2w-tab.terminal {
+      border-color: rgba(37, 99, 235, 0.46);
+      color: #bfdbfe;
+    }
+
+    .c2w-code-body {
+      display: grid;
+      grid-template-columns: 58px minmax(0, 1fr);
+      height: 456px;
+      min-height: 456px;
+    }
+
+    .c2w-code-body[hidden],
+    .c2w-terminal-pane[hidden],
+    .c2w-editor-lower[hidden] {
+      display: none !important;
+    }
+
+    .c2w-line-numbers {
+      overflow: hidden;
+      border-right: 1px solid var(--editor-border);
+      background: var(--editor-rail);
+      color: #858b98;
+      user-select: none;
+    }
+
+    .c2w-line-numbers-inner {
+      padding: 18px 0;
+      will-change: transform;
+    }
+
+    .c2w-line-numbers span {
+      display: block;
+      height: 24px;
+      padding-right: 12px;
+      text-align: right;
+      line-height: 24px;
+      font-size: 13px;
+    }
+
+    .c2w-code-stack {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      background: var(--editor-bg);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    .c2w-highlight,
+    .c2w-source {
+      position: absolute;
+      inset: 0;
+      box-sizing: border-box;
+      margin: 0;
+      border: 0;
+      padding: 18px 20px;
+      font-family: inherit;
+      font-size: 13px;
+      line-height: 24px;
+      letter-spacing: 0;
+      word-spacing: 0;
+      font-variant-ligatures: none;
+      font-feature-settings: "liga" 0, "calt" 0;
+      tab-size: 4;
+      white-space: pre;
+    }
+
+    .c2w-highlight {
+      overflow: hidden;
+      color: var(--editor-ink);
+      pointer-events: none;
+    }
+
+    .c2w-highlight-code {
+      display: block;
+      min-width: max-content;
+      font: inherit;
+      letter-spacing: 0;
+      white-space: pre;
+      will-change: transform;
+    }
+
+    .c2w-source {
+      width: 100%;
+      height: 100%;
+      resize: none;
+      overflow: auto;
+      background: transparent;
+      color: transparent;
+      -webkit-text-fill-color: transparent;
+      caret-color: #ffffff;
+      outline: none;
+      word-break: normal;
+      overflow-wrap: normal;
+    }
+
+    .c2w-terminal-pane {
+      min-height: 456px;
+      padding: 0;
+      background: var(--terminal);
+      color: var(--editor-ink);
+      overflow: hidden;
+    }
+
+    .c2w-terminal-dock {
+      min-height: 456px;
+      background: var(--terminal);
+    }
+
+    .c2w-terminal-dock #terminal-amd64-debian {
+      min-height: 456px;
+      height: 456px;
+      padding: 8px;
+      background: var(--terminal);
+    }
+
+    .c2w-terminal-dock .xterm {
+      width: 100%;
+      height: 100%;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 14px;
+    }
+
+    .c2w-terminal-dock .xterm-viewport,
+    .c2w-terminal-dock .xterm-screen {
+      width: 100% !important;
+      min-height: 100%;
+    }
+
+    .c2w-editor-card.terminal-active .c2w-terminal-pane,
+    .c2w-editor-card.terminal-active .c2w-terminal-dock,
+    .c2w-editor-card.terminal-active .c2w-terminal-dock #terminal-amd64-debian {
+      min-height: 680px;
+      height: 680px;
+    }
+
+    .tok-comment {
+      color: #34d399;
+    }
+
+    .tok-string {
+      color: #fbbf24;
+    }
+
+    .tok-macro {
+      color: #c084fc;
+    }
+
+    .tok-keyword {
+      color: #f472b6;
+    }
+
+    .tok-type {
+      color: #22d3ee;
+    }
+
+    .tok-number {
+      color: #fb923c;
+    }
+
+    .tok-attribute {
+      color: #fde047;
+    }
+
+    .c2w-editor-lower {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .c2w-run-panel {
+      min-width: 0;
+      padding: 12px;
+    }
+
+    .c2w-run-panel + .c2w-run-panel {
+      border-left: 1px solid var(--border);
+    }
+
+    .c2w-run-panel h3 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      color: var(--muted);
+    }
+
+    .c2w-run-output,
+    .c2w-event-log {
+      min-height: 168px;
+      max-height: 168px;
+      overflow: auto;
+      margin: 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #111827;
+      color: #dbe4ef;
+      padding: 10px;
+      white-space: pre-wrap;
+      line-height: 1.5;
+      font-size: 12px;
+    }
+
+    .c2w-event-log {
+      color: #cbd5e1;
+    }
+
+    @media (max-width: 1180px) {
+      .app-bar,
+      .editor-grid,
+      .runtime-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .output-log {
+        min-height: 320px;
+        max-height: 320px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .workspace {
+        width: min(100vw - 20px, 1480px);
+        padding-top: 10px;
+      }
+
+      .app-title h1 {
+        font-size: 22px;
+      }
+
+      .c2w-editor-intro,
+      .c2w-editor-lower {
+        grid-template-columns: 1fr;
+      }
+
+      .c2w-run-panel + .c2w-run-panel {
+        border-top: 1px solid var(--border);
+        border-left: 0;
+      }
+
+      .c2w-code-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .c2w-code-actions {
+        justify-content: flex-start;
+      }
+
+      .c2w-code-body {
+        grid-template-columns: 44px minmax(0, 1fr);
+        height: 380px;
+        min-height: 380px;
+      }
+
+      .c2w-terminal-pane {
+        min-height: 380px;
+      }
+
+      .c2w-terminal-dock,
+      .c2w-terminal-dock #terminal-amd64-debian {
+        min-height: 380px;
+        height: 380px;
+      }
+
+      .c2w-editor-card.terminal-active .c2w-terminal-pane,
+      .c2w-editor-card.terminal-active .c2w-terminal-dock,
+      .c2w-editor-card.terminal-active .c2w-terminal-dock #terminal-amd64-debian {
+        min-height: 560px;
+        height: 560px;
+      }
+
+      .c2w-highlight,
+      .c2w-source {
+        padding: 14px;
+        font-size: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="workspace">
+    <section class="app-bar">
+      <div class="app-title">
+        <h1>C2W Rust project editor library demo</h1>
+        <p>Two independent Cargo project editors share one browser container terminal and one Rust wrapper runtime.</p>
+      </div>
+      <aside class="status-strip" aria-label="Runtime status">
+        <div id="rust-wrapper-status" class="status-line">Loading c2w runtime...</div>
+        <div id="terminal-target-status" class="status-line">No editor is active yet.</div>
+        <div id="terminal-amd64-debian-status" class="status-line">Terminal not started yet.</div>
+      </aside>
+    </section>
+
+    <section class="library-note" aria-label="Using this editor as a library">
+      <div>
+        <h2>Use it on your page</h2>
+        <p>Create one shared c2w terminal bridge, then mount as many project editors as you need. Each editor owns its project folder while sharing the same browser container and Rust runtime.</p>
+      </div>
+      <pre><code>const runtime = new RustContainerWrapper();
+const terminal = new C2WRustEditor.SharedTerminalBridge({
+  terminalElement: "#terminal-amd64-debian",
+});
+
+C2WRustEditor.createProjectEditor({
+  root: "#my-editor",
+  runtime,
+  terminal,
+  project: {
+    id: "my-editor",
+    title: "My Cargo project",
+    projectDir: "/root/my-cargo-project",
+    tabs: [
+      { id: "cargo", label: "Cargo.toml", path: "Cargo.toml", defaultContent: cargoToml },
+      { id: "main", label: "src/main.rs", path: "src/main.rs", defaultContent: mainRs },
+    ],
+  },
+});</code></pre>
+    </section>
+
+    <section id="editor-demo-shell" class="editor-demo-shell editor-theme-night" aria-label="Editor examples">
+      <div class="editor-toolbar">
+        <div class="editor-toolbar-title">
+          <strong>Project editor examples</strong>
+          <span>Terminal opens as a tab inside the active editor; page-level runtime panels stay hidden.</span>
+        </div>
+        <div class="editor-theme-toggle" aria-label="Editor theme">
+          <button type="button" data-editor-theme="night" aria-pressed="true">Night</button>
+          <button type="button" data-editor-theme="day" aria-pressed="false">Day</button>
+        </div>
+      </div>
+      <section class="editor-grid">
+        <div id="codec-editor"></div>
+        <div id="telemetry-editor"></div>
+      </section>
+    </section>
+
+    <section class="runtime-hidden" aria-hidden="true">
+      <div class="terminal-shell">
+        <div class="terminal-header">
+          <span>/bin/bash inside c2w</span>
+          <span>shared runtime</span>
+        </div>
+        <div id="terminal-amd64-debian"></div>
+      </div>
+      <pre id="rust-wrapper-output"></pre>
+    </section>
+  </main>
+
+  <script src="./dist/coi-config.js?v=20260505-initial-sync-gray-night"></script>
+  <script src="./coi-serviceworker.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-pty@0.9.4/index.js"></script>
+  <script src="./dist/stack.js?v=20260505-initial-sync-gray-night"></script>
+  <script src="./dist/page.js?v=20260505-initial-sync-gray-night"></script>
+  <script src="./dist/rust-wrapper.js?v=20260505-initial-sync-gray-night"></script>
+  <script src="./dist/c2w-rust-project-editor.js?v=20260505-initial-sync-gray-night"></script>
+  <script src="./dist/amd64-debian-wasi.js?v=20260505-initial-sync-gray-night"></script>
+  <script src="./dist/c2w-rust-project-demo.js?v=20260505-initial-sync-gray-night"></script>
+</body>
+</html>

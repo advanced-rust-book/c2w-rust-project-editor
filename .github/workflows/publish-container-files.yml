@@ -1,0 +1,234 @@
+name: Publish container files
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to create at the selected branch HEAD, for example c2w-rust-2026.05.05"
+        required: true
+        type: string
+      release_name:
+        description: "Release title. Defaults to the tag name."
+        required: false
+        type: string
+      runner_labels_json:
+        description: "JSON for runs-on. Use a large Linux self-hosted runner for the default image."
+        required: true
+        default: '["self-hosted","linux","x64"]'
+        type: string
+      c2w_version:
+        description: "container2wasm release used by Dockerfile.c2w-builder."
+        required: true
+        default: "v0.8.4"
+        type: string
+      wasi_max_chunk:
+        description: "Split size for generated wasm container chunks."
+        required: true
+        default: "47MB"
+        type: string
+      buildx_memory:
+        description: "Buildx memory limit passed to the c2w builder."
+        required: true
+        default: "24g"
+        type: string
+      buildx_memory_swap:
+        description: "Buildx memory+swap limit passed to the c2w builder."
+        required: true
+        default: "32g"
+        type: string
+      c2w_extra_flags:
+        description: "Optional extra flags passed through to c2w."
+        required: false
+        type: string
+      force_rebuild:
+        description: "Force regeneration even if source hashes match existing chunks."
+        required: true
+        default: true
+        type: boolean
+      draft:
+        description: "Create the GitHub release as a draft."
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: "Mark the GitHub release as a prerelease."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-container-files-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish container files
+    runs-on: ${{ fromJSON(inputs.runner_labels_json) }}
+    timeout-minutes: 720
+
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      RELEASE_NAME: ${{ inputs.release_name }}
+      C2W_VERSION: ${{ inputs.c2w_version }}
+      WASI_MAX_CHUNK: ${{ inputs.wasi_max_chunk }}
+      C2W_BUILDX_MEMORY: ${{ inputs.buildx_memory }}
+      C2W_BUILDX_MEMORY_SWAP: ${{ inputs.buildx_memory_swap }}
+      C2W_EXTRA_FLAGS: ${{ inputs.c2w_extra_flags }}
+      C2W_BUILDX_BUILDER_NAME: c2w-release-${{ github.run_id }}
+      C2W_BUILDX_RECREATE: "1"
+      FORCE_REBUILD: ${{ inputs.force_rebuild && '1' || '0' }}
+      CLEAN_REMOVED_IMAGES: "1"
+
+    steps:
+      - name: Check out selected branch state
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Validate release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RELEASE_TAG}" ]; then
+            echo "release_tag is required"
+            exit 1
+          fi
+
+          case "${RELEASE_TAG}" in
+            *[!A-Za-z0-9._-]*)
+              echo "release_tag may only contain letters, numbers, dot, underscore, and hyphen so generated asset links stay stable."
+              exit 1
+              ;;
+          esac
+
+          git check-ref-format "refs/tags/${RELEASE_TAG}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Tag already exists on origin: ${RELEASE_TAG}"
+            exit 1
+          fi
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Release already exists: ${RELEASE_TAG}"
+            exit 1
+          fi
+
+          echo "Selected ref: ${GITHUB_REF_NAME}"
+          echo "Selected SHA: ${GITHUB_SHA}"
+          echo "Release tag: ${RELEASE_TAG}"
+
+      - name: Build browser assets and c2w container files
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker version
+          docker compose version
+          docker compose up --build --exit-code-from builder builder
+
+      - name: Stop compose services
+        if: always()
+        shell: bash
+        run: |
+          docker compose down --remove-orphans
+          docker buildx rm "${C2W_BUILDX_BUILDER_NAME}" >/dev/null 2>&1 || true
+
+      - name: Stage release assets and notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_dir="release-container-files"
+          notes_file="release-readme.md"
+          rm -rf "${release_dir}" "${notes_file}"
+          mkdir -p "${release_dir}"
+
+          mapfile -t container_files < <(find docs/containers -maxdepth 1 -type f | sort)
+          if [ "${#container_files[@]}" -eq 0 ]; then
+            echo "No generated files found in docs/containers"
+            exit 1
+          fi
+
+          for file in "${container_files[@]}"; do
+            cp "${file}" "${release_dir}/$(basename "${file}")"
+          done
+
+          if [ -f docs/src/c2w-net-proxy.wasm ]; then
+            cp docs/src/c2w-net-proxy.wasm "${release_dir}/c2w-net-proxy.wasm"
+          fi
+
+          (
+            cd "${release_dir}"
+            : > SHA256SUMS.txt
+            while IFS= read -r -d '' name; do
+              sha256sum "${name}" >> SHA256SUMS.txt
+            done < <(find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%P\0' | sort -z)
+          )
+
+          title="${RELEASE_NAME:-${RELEASE_TAG}}"
+          {
+            printf "# %s\n\n" "${title}"
+            printf "Built from \`%s@%s\` on selected ref \`%s\`.\n\n" "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" "${GITHUB_REF_NAME}"
+            printf "This release contains the generated c2w container files from \`docs/containers\`"
+            if [ -f "${release_dir}/c2w-net-proxy.wasm" ]; then
+              printf " plus \`c2w-net-proxy.wasm\`"
+            fi
+            printf ".\n\n"
+            printf -- "- c2w version: \`%s\`\n" "${C2W_VERSION}"
+            printf -- "- wasm chunk size: \`%s\`\n" "${WASI_MAX_CHUNK}"
+            printf -- "- Buildx memory: \`%s\`, swap: \`%s\`\n\n" "${C2W_BUILDX_MEMORY}" "${C2W_BUILDX_MEMORY_SWAP}"
+            printf "## File Links\n\n"
+            printf "| File | Size | SHA-256 | Link |\n"
+            printf "|---|---:|---|---|\n"
+            (
+              cd "${release_dir}"
+              while IFS= read -r -d '' name; do
+                size="$(stat -c%s "${name}")"
+                sha="$(sha256sum "${name}" | cut -d ' ' -f 1)"
+                url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${name}"
+                printf "| \`%s\` | %s bytes | \`%s\` | [download](%s) |\n" "${name}" "${size}" "${sha}" "${url}"
+              done < <(find . -maxdepth 1 -type f -printf '%P\0' | sort -z)
+            )
+          } > "${notes_file}"
+
+          echo "Prepared release assets:"
+          find "${release_dir}" -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: Upload workflow artifact copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-files-${{ inputs.release_tag }}
+          path: |
+            release-container-files
+            release-readme.md
+          if-no-files-found: error
+          include-hidden-files: true
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT: ${{ inputs.draft }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="${RELEASE_NAME:-${RELEASE_TAG}}"
+          flags=(--target "${GITHUB_SHA}" --title "${title}" --notes-file release-readme.md)
+
+          if [ "${DRAFT}" = "true" ]; then
+            flags+=(--draft)
+          fi
+
+          if [ "${PRERELEASE}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          mapfile -d '' assets < <(find release-container-files -maxdepth 1 -type f -print0 | sort -z)
+          gh release create "${RELEASE_TAG}" "${assets[@]}" "${flags[@]}"

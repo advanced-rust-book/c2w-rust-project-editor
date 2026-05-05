@@ -1,0 +1,16 @@
+FROM docker:27-cli
+
+ARG C2W_VERSION=v0.8.4
+
+RUN set -eux; \
+    apk add --no-cache bash ca-certificates coreutils curl gzip tar; \
+    curl -fsSL "https://github.com/container2wasm/container2wasm/releases/download/${C2W_VERSION}/container2wasm-${C2W_VERSION}-linux-amd64.tar.gz" -o /tmp/container2wasm.tgz; \
+    tar -xzf /tmp/container2wasm.tgz -C /usr/local/bin; \
+    chmod +x /usr/local/bin/c2w /usr/local/bin/c2w-net; \
+    mkdir -p /usr/local/share; \
+    curl -fsSL "https://github.com/container2wasm/container2wasm/releases/download/${C2W_VERSION}/c2w-net-proxy.wasm" -o /usr/local/share/c2w-net-proxy.wasm; \
+    rm -f /tmp/container2wasm.tgz
+
+WORKDIR /workspace
+ENTRYPOINT ["/bin/bash"]
+CMD ["./create-images.sh"]

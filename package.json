@@ -1,0 +1,12 @@
+{
+  "name": "container2wasm-rust-demo",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
+    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<title>Redirecting to Rust wrapper demo</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta http-equiv="refresh" content="0; url=./index.html">
+<style>
+body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 2rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Redirecting...</h1>
+<p>The Rust container demo is now a single-page JavaScript wrapper demo. If you are not redirected, open <a id="target-link" href="./index.html">index.html</a>.</p>
+</main>
+<script>
+(function () {
+    var target = new URL("./index.html", location.href);
+    target.search = location.search;
+    target.hash = location.hash;
+    document.getElementById("target-link").setAttribute("href", target.href);
+    location.replace(target.href);
+})();
+</script>
+</body>
+
+</html>

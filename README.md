@@ -8,39 +8,51 @@ The important delivery path is:
 docker compose up --build
 ```
 
-That command builds the TypeScript browser assets, creates the prebundled Rust container image, converts it to WASI/WebAssembly chunks with container2wasm, and serves the finished static experience on `http://localhost:8080`.
+That command builds the TypeScript browser assets, serves the static experience on `http://localhost:8080`, and loads the prebuilt c2w runtime chunks from the configured GitHub Release.
 
 ## What Compose Delivers
 
-`docker compose up --build` runs three services:
+`docker compose up --build` runs two services by default:
 
 - `assets`: uses `node:22-alpine`, installs the local TypeScript toolchain, and emits browser JavaScript into `docs/dist`.
-- `builder`: uses `Dockerfile.c2w-builder`, downloads the configured container2wasm release, builds `src/amd64-debian-wasi/Dockerfile`, converts that Linux Rust image to WASI, splits the output into loadable chunks under `docs/containers`, and copies `c2w-net-proxy.wasm` into `docs/src`.
-- `runner`: uses `httpd:2.4-alpine`, serves `docs/`, and injects the cross-origin isolation headers required by the browser WASI runtime.
+- `runner`: uses `httpd:2.4-alpine`, serves `docs/`, injects the cross-origin isolation headers required by the browser WASI runtime, and proxies `/release-assets/<tag>/` to the public GitHub Release assets.
+
+The optional `builder` service is behind the `local-image` profile. It exists for regenerating c2w chunks locally, but normal demo startup no longer depends on local `docs/containers` output.
 
 The running page is `docs/index.html`. It mounts two independent Cargo project editors that share one Rust container runtime and one terminal bridge. Each editor can write `Cargo.toml`, `src/lib.rs`, and `src/main.rs` into its own container folder, fetch cached dependencies, compile with Cargo, run the binary, show compiler diagnostics, and export the complete project as a zip.
 
 ## Generated Artifacts
 
-After a successful build, the useful delivery payload is:
+After a successful release build, the useful delivery payload is:
 
 - `docs/dist/`: compiled browser runtime, project editor, worker, WASI, and wrapper scripts.
-- `docs/containers/`: `amd64-debian-wasi-container.manifest.json` plus `amd64-debian-wasi-container*.wasm` chunks.
+- GitHub Release assets:
+  - `amd64-debian-wasi-container.manifest.json` plus the split `amd64-debian-wasi-container*.wasm` runtime chunks.
+  - `amd64-debian-wasi-cargo-cache.manifest.json` and `amd64-debian-wasi-cargo-cache.tar.gz`, the hydrated Cargo registry/tool cache.
 - `docs/src/c2w-net-proxy.wasm`: network proxy asset used by container2wasm.
 - `docs/extras/` and `docs/src/browser_wasi_shim/`: supporting WASI assets.
 - `docs/index.html`: static demo page that wires the runtime and editor together.
 
+At runtime, the worker downloads release chunks progressively, reports chunk-level progress in the status strip, stores chunks in Cache Storage, and reuses cached chunks on reload. After the runtime instantiates, the Rust wrapper runs `hydrate-rust-cache` inside the container. That script downloads `amd64-debian-wasi-cargo-cache.tar.gz` from the same GitHub Release through the browser-backed c2w network proxy, unpacks it into `/usr/local/cargo`, and leaves Cargo in offline mode.
+
+The default browser URL for the image payload is same-origin `/release-assets/1.0.1/`, which the local Apache container proxies to GitHub's stable release download URLs. You can point at a newer release with `?releaseTag=<tag>`, or override the browser image host with `?containerBase=...` only if that alternate host is CORS-readable from the browser. The in-container Cargo cache download can be overridden with `?rustCacheUrl=...`.
+
+The old all-in-one `1.0.1` image is about 1.97 GiB when its chunks are assembled into a single WebAssembly module. Chromium rejects that module with a 1 GiB `WebAssembly.instantiate()` buffer limit, so this split keeps bulky Cargo cache data out of the boot image. Publish a new release from this tree and use `?releaseTag=<tag>` until the default tag is bumped.
+
 ## Rust Environment
 
-The browser container is built from `rust:1.88.0-slim-bookworm` and is configured for offline Cargo use after image creation.
+The browser container is built from `rust:1.88.0-slim-bookworm`. The converted c2w image contains the Rust toolchain, the shell, and system packages. Cargo registry data and installed Rust helper binaries are delivered separately in the `amd64-debian-wasi-cargo-cache.tar.gz` release asset.
 
 Preinstalled system tools and libraries include:
 
-- `bash`, `build-essential`, `coreutils`, `tar`, `zip`, `unzip`
+- `bash`, `build-essential`, `coreutils`, `curl`, `git`, `gzip`, `tar`, `zip`, `unzip`
 - `clang`, `libclang-dev`, `libffi-dev`
 - `openmpi-bin`, `libopenmpi-dev`
 - `pkg-config`, `protobuf-compiler`
 - Rust target `wasm32-unknown-unknown`
+
+Hydrated from the Cargo cache asset:
+
 - `wasm-bindgen-cli` `0.2.120`
 
 Precached Cargo crates include the external libraries covered by the study material:
@@ -64,15 +76,14 @@ Precached Cargo crates include the external libraries covered by the study mater
 
 Rust standard-library items from the notes, such as `Arc`, `Mutex`, `Cell`, `RefCell`, `Iterator`, `catch_unwind`, `std::fs`, and `std::thread`, do not need installation. They are available with the Rust toolchain itself.
 
-If you want a new third-party crate to work inside the browser container without network access, add it to `src/amd64-debian-wasi/c2w-rust-prebundle/Cargo.toml`, regenerate `Cargo.lock`, and rebuild the image.
+If you want a new third-party crate to work inside the browser container without network access, add it to `src/amd64-debian-wasi/c2w-rust-prebundle/Cargo.toml`, regenerate `Cargo.lock`, and rebuild the release artifacts. The cache asset should change; the base c2w image only changes when the system image inputs change.
 
 ## Run Locally
 
 Prerequisites:
 
 - Docker and Docker Compose.
-- Enough Docker/BuildKit memory for container2wasm packing. The compose defaults request a `24g` Buildx memory limit and `32g` memory+swap limit for the conversion builder.
-- Network access for the first build, because the build downloads Node packages, container2wasm, Rust crates for the prebundle, and base images.
+- Network access for the first run, because the browser downloads the release container chunks and caches them.
 
 Start the full demo:
 
@@ -93,20 +104,22 @@ $env:HTTP_PORT = "8090"
 docker compose up --build
 ```
 
-Force regeneration of the WASM container chunks:
+Regenerate WASM container chunks locally:
 
 ```powershell
+$env:COMPOSE_PROFILES = "local-image"
 $env:FORCE_REBUILD = "1"
-docker compose up --build
+docker compose up --build builder
 ```
 
 Increase Buildx memory for a larger Docker Desktop or CI machine:
 
 ```powershell
+$env:COMPOSE_PROFILES = "local-image"
 $env:C2W_BUILDX_MEMORY = "32g"
 $env:C2W_BUILDX_MEMORY_SWAP = "48g"
 $env:C2W_BUILDX_RECREATE = "1"
-docker compose up --build
+docker compose up --build builder
 ```
 
 Stop the local server:
@@ -129,10 +142,10 @@ The container2wasm conversion can be memory-sensitive. If the hosted runner is t
 
 ## Release Workflow
 
-`.github/workflows/publish-container-files.yml` builds the same compose path in CI:
+`.github/workflows/publish-container-files.yml` builds the same local-image compose path in CI:
 
 ```bash
-docker compose up --build --exit-code-from builder builder
+docker compose --profile local-image up --build --exit-code-from builder builder
 ```
 
-It then stages the generated `docs/containers` files, adds `SHA256SUMS.txt`, uploads a workflow artifact copy, and creates a GitHub Release containing the WASM container payload.
+It then stages the generated `docs/containers` files, adds `SHA256SUMS.txt`, uploads a workflow artifact copy, and creates a GitHub Release containing both the WASM runtime chunks and the Cargo cache tarball.

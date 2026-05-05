@@ -6,6 +6,8 @@ let streamData: Uint8Array;
 let imagename = "";
 let numchunks: WasmImageChunks | undefined;
 
+const DEFAULT_BROWSER_WASM_MODULE_BYTE_LIMIT = 1024 * 1024 * 1024;
+
 const errStatus = {
     val: 0,
 };
@@ -41,15 +43,37 @@ function getImagename(): string {
     return imagename;
 }
 
-function resolveChunkFiles(prefix: string, chunks: WasmImageChunks | undefined): string[] {
+interface ResolvedChunkFiles {
+    files: string[];
+    cacheKey: string;
+}
+
+interface FetchedChunk {
+    buffer: ArrayBuffer;
+    fromCache: boolean;
+}
+
+function isWasmImageChunkList(value: unknown): value is WasmImageChunkList {
+    return typeof value === "object"
+        && value !== null
+        && Array.isArray((value as { files?: unknown }).files);
+}
+
+function resolveChunkFiles(prefix: string, chunks: WasmImageChunks | undefined): ResolvedChunkFiles {
+    if (isWasmImageChunkList(chunks)) {
+        const files = resolveChunkFileNames(prefix, chunks.files);
+        return {
+            files,
+            cacheKey: chunks.cacheKey || stableChunkCacheKey(prefix, files),
+        };
+    }
+
     if (Array.isArray(chunks)) {
-        const base = prefix.substring(0, prefix.lastIndexOf("/") + 1);
-        return chunks.map((file) => {
-            if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(file) || file.startsWith("/")) {
-                return file;
-            }
-            return base + file;
-        });
+        const files = resolveChunkFileNames(prefix, chunks);
+        return {
+            files,
+            cacheKey: stableChunkCacheKey(prefix, files),
+        };
     }
 
     const count = Number(chunks);
@@ -65,28 +89,359 @@ function resolveChunkFiles(prefix: string, chunks: WasmImageChunks | undefined):
         }
         files.push(prefix + suffix + ".wasm");
     }
-    return files;
+    return {
+        files,
+        cacheKey: stableChunkCacheKey(prefix, files),
+    };
 }
 
-function fetchChunks(callback: (wasm: ArrayBuffer) => void): void {
-    const files = resolveChunkFiles(imagename, numchunks);
-    const requests = files.map((file) => {
-        return fetch(file, { cache: "no-store", credentials: "same-origin" })
-            .then((resp) => {
-                if (!resp.ok) {
-                    throw new Error("failed to fetch " + file + ": HTTP " + resp.status);
-                }
-                return resp.arrayBuffer();
-            });
+function resolveChunkFileNames(prefix: string, files: string[]): string[] {
+    const base = prefix.substring(0, prefix.lastIndexOf("/") + 1);
+    return files.map((file) => {
+        if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(file) || file.startsWith("/")) {
+            return file;
+        }
+        return base + file;
+    });
+}
+
+function stableChunkCacheKey(prefix: string, files: string[]): string {
+    return prefix + "|" + files.length + "|" + files.slice(0, 3).join("|") + "|" + files.slice(-3).join("|");
+}
+
+function fetchChunks(): Promise<ArrayBuffer> {
+    return fetchChunksAsync().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        postWasmProgress({
+            phase: "error",
+            chunkCount: 0,
+            loadedBytes: 0,
+            cachedChunks: 0,
+            downloadedChunks: 0,
+            cacheEnabled: false,
+            message,
+        });
+        console.error("failed to fetch wasm chunks:", error);
+        throw error;
+    });
+}
+
+async function fetchChunksAsync(): Promise<ArrayBuffer> {
+    const resolved = resolveChunkFiles(imagename, numchunks);
+    const files = resolved.files;
+    const cacheName = wasmChunkCacheName(resolved.cacheKey);
+    const cache = await openWasmChunkCache(cacheName);
+    const buffers: ArrayBuffer[] = [];
+    const totals = {
+        loadedBytes: 0,
+        totalBytes: 0,
+        cachedChunks: 0,
+        downloadedChunks: 0,
+    };
+
+    postWasmProgress({
+        phase: "begin",
+        chunkCount: files.length,
+        loadedBytes: 0,
+        totalBytes: 0,
+        cachedChunks: 0,
+        downloadedChunks: 0,
+        cacheEnabled: Boolean(cache),
+        cacheName,
     });
 
-    Promise.all(requests)
-        .then((buffers) => new Blob(buffers).arrayBuffer())
-        .then(callback)
-        .catch((error: unknown) => {
-            console.error("failed to fetch wasm chunks:", error);
-            throw error;
+    const moduleByteLimit = configuredWasmModuleByteLimit();
+    const estimatedTotalBytes = await estimateWasmImageBytes(files, cache);
+    if (estimatedTotalBytes !== undefined) {
+        postWasmProgress({
+            phase: "size-check",
+            chunkCount: files.length,
+            loadedBytes: 0,
+            totalBytes: estimatedTotalBytes,
+            cachedChunks: 0,
+            downloadedChunks: 0,
+            cacheEnabled: Boolean(cache),
+            cacheName,
         });
+
+        if (moduleByteLimit > 0 && estimatedTotalBytes > moduleByteLimit) {
+            throw new Error(
+                "The release container image is " + formatWorkerByteCount(estimatedTotalBytes)
+                + ", but this browser rejects WebAssembly modules above "
+                + formatWorkerByteCount(moduleByteLimit)
+                + ". Rebuild and publish a slimmer c2w image below the browser limit."
+            );
+        }
+    }
+
+    for (let index = 0; index < files.length; index += 1) {
+        const chunk = await fetchChunk(files[index], index, files.length, cache, cacheName, totals);
+        buffers.push(chunk.buffer);
+        totals.loadedBytes += chunk.buffer.byteLength;
+        totals.totalBytes += chunk.buffer.byteLength;
+        if (moduleByteLimit > 0 && totals.loadedBytes > moduleByteLimit) {
+            throw new Error(
+                "Downloaded wasm image bytes exceeded "
+                + formatWorkerByteCount(moduleByteLimit)
+                + ". Rebuild and publish a slimmer c2w image below the browser limit."
+            );
+        }
+        if (chunk.fromCache) {
+            totals.cachedChunks += 1;
+        } else {
+            totals.downloadedChunks += 1;
+        }
+    }
+
+    postWasmProgress({
+        phase: "assemble",
+        chunkCount: files.length,
+        loadedBytes: totals.loadedBytes,
+        totalBytes: totals.totalBytes,
+        cachedChunks: totals.cachedChunks,
+        downloadedChunks: totals.downloadedChunks,
+        cacheEnabled: Boolean(cache),
+        cacheName,
+    });
+
+    const wasm = await new Blob(buffers).arrayBuffer();
+    postWasmProgress({
+        phase: "ready",
+        chunkCount: files.length,
+        loadedBytes: wasm.byteLength,
+        totalBytes: wasm.byteLength,
+        cachedChunks: totals.cachedChunks,
+        downloadedChunks: totals.downloadedChunks,
+        cacheEnabled: Boolean(cache),
+        cacheName,
+    });
+    return wasm;
+}
+
+function wasmChunkCacheName(cacheKey: string): string {
+    return "c2w-wasm-chunks-v1-" + sanitizeCacheName(cacheKey);
+}
+
+function configuredWasmModuleByteLimit(): number {
+    const params = new URLSearchParams(location.search);
+    const raw = params.get("wasmModuleLimitBytes");
+    if (!raw) {
+        return DEFAULT_BROWSER_WASM_MODULE_BYTE_LIMIT;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return DEFAULT_BROWSER_WASM_MODULE_BYTE_LIMIT;
+    }
+    return Math.floor(parsed);
+}
+
+async function estimateWasmImageBytes(files: string[], cache: Cache | null): Promise<number | undefined> {
+    let total = 0;
+    for (const file of files) {
+        const request = new Request(file, { credentials: "same-origin" });
+        const cached = await cache?.match(request);
+        const cachedBytes = parsePositiveInteger(cached?.headers.get("X-C2W-Bytes") || null);
+        if (cachedBytes !== undefined) {
+            total += cachedBytes;
+            continue;
+        }
+
+        let resp: Response;
+        try {
+            resp = await fetch(request, { method: "HEAD", cache: "no-store" });
+        } catch (error) {
+            console.warn("failed to check wasm chunk size:", file, error);
+            return undefined;
+        }
+        if (!resp.ok) {
+            return undefined;
+        }
+        const contentLength = parsePositiveInteger(resp.headers.get("Content-Length"));
+        if (contentLength === undefined) {
+            return undefined;
+        }
+        total += contentLength;
+    }
+    return total;
+}
+
+async function openWasmChunkCache(cacheName: string): Promise<Cache | null> {
+    if (typeof caches === "undefined") {
+        return null;
+    }
+    try {
+        return await caches.open(cacheName);
+    } catch (error) {
+        console.warn("wasm chunk cache is unavailable:", error);
+        return null;
+    }
+}
+
+function sanitizeCacheName(value: string): string {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+}
+
+async function fetchChunk(
+    file: string,
+    chunkIndex: number,
+    chunkCount: number,
+    cache: Cache | null,
+    cacheName: string,
+    totals: { loadedBytes: number; totalBytes: number; cachedChunks: number; downloadedChunks: number }
+): Promise<FetchedChunk> {
+    const request = new Request(file, { credentials: "same-origin" });
+    const cached = await cache?.match(request);
+    if (cached) {
+        const buffer = await cached.arrayBuffer();
+        postWasmProgress({
+            phase: "cache-hit",
+            chunkIndex,
+            chunkCount,
+            loadedBytes: totals.loadedBytes + buffer.byteLength,
+            totalBytes: totals.totalBytes + buffer.byteLength,
+            cachedChunks: totals.cachedChunks + 1,
+            downloadedChunks: totals.downloadedChunks,
+            cacheEnabled: true,
+            cacheName,
+            url: file,
+        });
+        return { buffer, fromCache: true };
+    }
+
+    postWasmProgress({
+        phase: "download-start",
+        chunkIndex,
+        chunkCount,
+        loadedBytes: totals.loadedBytes,
+        totalBytes: totals.totalBytes,
+        cachedChunks: totals.cachedChunks,
+        downloadedChunks: totals.downloadedChunks,
+        cacheEnabled: Boolean(cache),
+        cacheName,
+        url: file,
+    });
+
+    const resp = await fetch(request, { cache: "no-store" });
+    if (!resp.ok) {
+        throw new Error("failed to fetch " + file + ": HTTP " + resp.status);
+    }
+
+    const bytes = await readResponseBytes(resp, (chunkLoadedBytes, chunkTotalBytes) => {
+        postWasmProgress({
+            phase: "download-progress",
+            chunkIndex,
+            chunkCount,
+            chunkLoadedBytes,
+            chunkTotalBytes,
+            loadedBytes: totals.loadedBytes + chunkLoadedBytes,
+            totalBytes: totals.totalBytes + (chunkTotalBytes || 0),
+            cachedChunks: totals.cachedChunks,
+            downloadedChunks: totals.downloadedChunks,
+            cacheEnabled: Boolean(cache),
+            cacheName,
+            url: file,
+        });
+    });
+
+    if (cache) {
+        await cache.put(request, new Response(exactArrayBuffer(bytes), {
+            headers: {
+                "Content-Type": "application/wasm",
+                "X-C2W-Bytes": String(bytes.byteLength),
+            },
+        }));
+    }
+
+    postWasmProgress({
+        phase: "download-complete",
+        chunkIndex,
+        chunkCount,
+        loadedBytes: totals.loadedBytes + bytes.byteLength,
+        totalBytes: totals.totalBytes + bytes.byteLength,
+        cachedChunks: totals.cachedChunks,
+        downloadedChunks: totals.downloadedChunks + 1,
+        cacheEnabled: Boolean(cache),
+        cacheName,
+        url: file,
+    });
+
+    return { buffer: exactArrayBuffer(bytes), fromCache: false };
+}
+
+async function readResponseBytes(resp: Response, onProgress: (loadedBytes: number, totalBytes?: number) => void): Promise<Uint8Array> {
+    const totalBytes = parsePositiveInteger(resp.headers.get("Content-Length")) || undefined;
+    if (!resp.body) {
+        const buffer = await resp.arrayBuffer();
+        onProgress(buffer.byteLength, totalBytes || buffer.byteLength);
+        return new Uint8Array(buffer);
+    }
+
+    const reader = resp.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let loadedBytes = 0;
+
+    while (true) {
+        const next = await reader.read();
+        if (next.done) {
+            break;
+        }
+        chunks.push(next.value);
+        loadedBytes += next.value.byteLength;
+        onProgress(loadedBytes, totalBytes);
+    }
+
+    return concatWorkerChunks(chunks, loadedBytes);
+}
+
+function parsePositiveInteger(value: string | null): number | undefined {
+    if (!value) {
+        return undefined;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+function formatWorkerByteCount(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes < 0) {
+        return String(bytes) + " bytes";
+    }
+    if (bytes < 1024) {
+        return Math.round(bytes) + " bytes";
+    }
+    const units = ["KiB", "MiB", "GiB", "TiB"];
+    let value = bytes / 1024;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+    return value.toFixed(precision) + " " + units[unitIndex];
+}
+
+function concatWorkerChunks(chunks: Uint8Array[], totalSize: number): Uint8Array {
+    const output = new Uint8Array(totalSize);
+    let offset = 0;
+    for (const chunk of chunks) {
+        output.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return output;
+}
+
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    return copy.buffer;
+}
+
+function postWasmProgress(progress: Omit<WasmImageProgressMessage, "type">): void {
+    postMessage({ type: "wasm-image-progress", ...progress });
 }
 
 function requireSocketBuffer(): void {

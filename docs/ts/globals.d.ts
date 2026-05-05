@@ -1,4 +1,37 @@
-type WasmImageChunks = number | string[];
+interface WasmImageChunkList {
+    files: string[];
+    cacheKey?: string;
+}
+
+type WasmImageChunks = number | string[] | WasmImageChunkList;
+
+type WasmImageProgressPhase =
+    | "begin"
+    | "size-check"
+    | "cache-hit"
+    | "download-start"
+    | "download-progress"
+    | "download-complete"
+    | "assemble"
+    | "ready"
+    | "error";
+
+interface WasmImageProgressMessage {
+    type: "wasm-image-progress";
+    phase: WasmImageProgressPhase;
+    chunkIndex?: number;
+    chunkCount: number;
+    chunkLoadedBytes?: number;
+    chunkTotalBytes?: number;
+    loadedBytes: number;
+    totalBytes?: number;
+    cachedChunks: number;
+    downloadedChunks: number;
+    cacheEnabled: boolean;
+    cacheName?: string;
+    url?: string;
+    message?: string;
+}
 
 type RuntimeNetMode = string;
 
@@ -277,6 +310,9 @@ interface Window {
     wasiDirectFs?: WasiDirectFsClient;
     RustContainerWrapper?: typeof RustContainerWrapper;
     rustContainer?: RustContainerWrapper;
+    c2wRustLibraryCacheKey?: string;
+    c2wRustLibraryCacheUrl?: string;
+    c2wRustReleaseTag?: string;
     newStack?: (
         worker: Worker,
         workerImageNamePrefix: string,

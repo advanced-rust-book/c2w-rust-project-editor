@@ -79,6 +79,13 @@ interface RustFetchLibrariesOptions extends RustCommandOptions {
     locked?: boolean;
 }
 
+interface RustLibraryCacheOptions extends RustCommandOptions {
+    url?: string;
+    cacheKey?: string;
+    startupTimeoutMs?: number;
+    force?: boolean;
+}
+
 interface RustSolanaProjectFiles {
     cargoToml?: string;
     libRs?: string;
@@ -168,6 +175,7 @@ class RustContainerWrapper {
     private commandSequence = 0;
     private fileSequence = 0;
     private commandQueue: Promise<void> = Promise.resolve();
+    private libraryCachePromise?: Promise<RustCommandResult>;
 
     constructor(options: RustContainerWrapperOptions = {}) {
         this.sendInputFn = options.sendInput || ((data: string) => {
@@ -196,6 +204,23 @@ class RustContainerWrapper {
         this.terminalInputChunkSize = Math.max(64, options.terminalInputChunkSize ?? 512);
         this.terminalInputChunkDelayMs = Math.max(0, options.terminalInputChunkDelayMs ?? 15);
         this.fileTransferChunkSize = Math.max(64, options.fileTransferChunkSize ?? 256);
+    }
+
+    ensureLibraryCache(options: RustLibraryCacheOptions = {}): Promise<RustCommandResult> {
+        if (!this.libraryCachePromise || options.force) {
+            this.libraryCachePromise = this.hydrateLibraryCache(options)
+                .then((result) => {
+                    if (result.exitCode !== 0) {
+                        this.libraryCachePromise = undefined;
+                    }
+                    return result;
+                })
+                .catch((error: unknown) => {
+                    this.libraryCachePromise = undefined;
+                    throw error;
+                });
+        }
+        return this.libraryCachePromise;
     }
 
     exec(command: string, options: RustCommandOptions = {}): Promise<RustCommandResult> {
@@ -765,7 +790,8 @@ class RustContainerWrapper {
         };
     }
 
-    fetchLibraries(projectDir: string, options: RustFetchLibrariesOptions = {}): Promise<RustCommandResult> {
+    async fetchLibraries(projectDir: string, options: RustFetchLibrariesOptions = {}): Promise<RustCommandResult> {
+        await this.ensureLibraryCacheSucceeded();
         const dir = RustContainerWrapper.normalizeRemotePath(projectDir);
         const locked = options.locked ? " --locked" : "";
         const cargoEnv = RustContainerWrapper.cargoNetworkEnvPrefix();
@@ -799,6 +825,7 @@ class RustContainerWrapper {
     }
 
     async compile(projectDir: string, options: RustCompileOptions = {}): Promise<RustCompileResult> {
+        await this.ensureLibraryCacheSucceeded();
         const dir = RustContainerWrapper.normalizeRemotePath(projectDir);
         const release = options.release ? " --release" : "";
         const messageFormat = options.messageFormat === "json" ? " --message-format=json" : "";
@@ -841,7 +868,8 @@ class RustContainerWrapper {
         };
     }
 
-    run(projectDir: string, options: RustRunOptions = {}): Promise<RustCommandResult> {
+    async run(projectDir: string, options: RustRunOptions = {}): Promise<RustCommandResult> {
+        await this.ensureLibraryCacheSucceeded();
         const dir = RustContainerWrapper.normalizeRemotePath(projectDir);
         const release = options.release ? " --release" : "";
         const args = options.args && options.args.length > 0
@@ -857,6 +885,27 @@ class RustContainerWrapper {
                 displayCommand: options.displayCommand || "cargo run --quiet" + release + args,
             }
         );
+    }
+
+    private async ensureLibraryCacheSucceeded(): Promise<void> {
+        const result = await this.ensureLibraryCache();
+        if (result.exitCode !== 0) {
+            throw new Error("failed to hydrate Rust library cache:\n" + (result.stderr || result.stdout || result.rawOutput));
+        }
+    }
+
+    private hydrateLibraryCache(options: RustLibraryCacheOptions): Promise<RustCommandResult> {
+        const url = options.url || RustContainerWrapper.defaultLibraryCacheUrl();
+        const cacheKey = options.cacheKey || RustContainerWrapper.defaultLibraryCacheKey(url);
+        const command = RustContainerWrapper.libraryCacheHydrateCommand(url, cacheKey);
+        return this.execWithStartupRetry(command, {
+            ...options,
+            status: options.status || "Hydrating Rust library cache",
+            terminalTitle: options.terminalTitle || "Hydrate Rust library cache",
+            displayCommand: options.displayCommand || "hydrate Rust library cache",
+            timeoutMs: options.timeoutMs ?? 900000,
+            streamOutput: options.streamOutput ?? true,
+        }, options.startupTimeoutMs ?? 900000);
     }
 
     async createSolanaBinaryCodecProject(
@@ -1470,6 +1519,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 await RustContainerWrapper.sleep(this.terminalInputChunkDelayMs);
             }
         }
+    }
+
+    private async execWithStartupRetry(
+        command: string,
+        options: RustCommandOptions,
+        startupTimeoutMs: number
+    ): Promise<RustCommandResult> {
+        const deadline = Date.now() + Math.max(0, startupTimeoutMs);
+        let attempts = 0;
+        let lastError: unknown;
+
+        do {
+            attempts += 1;
+            try {
+                return await this.exec(command, options);
+            } catch (error) {
+                lastError = error;
+                if (!RustContainerWrapper.isTerminalStartupError(error) || Date.now() >= deadline) {
+                    throw error;
+                }
+                this.emitStatus("Waiting for the Rust terminal before hydrating the library cache...");
+                await RustContainerWrapper.sleep(Math.min(2500, Math.max(500, this.pollIntervalMs * attempts)));
+            }
+        } while (Date.now() < deadline);
+
+        throw lastError instanceof Error ? lastError : new Error(String(lastError));
     }
 
     private async prepareTerminalForWrappedCommand(commandId: string, timeoutMs: number): Promise<void> {
@@ -2493,6 +2568,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "CARGO_NET_GIT_FETCH_WITH_CLI=true",
             "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse",
         ].join(" ");
+    }
+
+    private static defaultLibraryCacheUrl(): string {
+        const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+        const override = params.get("rustCacheUrl");
+        if (override && override.trim()) {
+            return override.trim();
+        }
+        if (typeof window !== "undefined" && window.c2wRustLibraryCacheUrl) {
+            return window.c2wRustLibraryCacheUrl;
+        }
+
+        const releaseOverride = params.get("releaseTag");
+        const releaseTag = releaseOverride && releaseOverride.trim()
+            ? releaseOverride.trim()
+            : typeof window !== "undefined" && window.c2wRustReleaseTag
+            ? window.c2wRustReleaseTag
+            : "1.0.1";
+        return "https://github.com/advanced-rust-book/c2w-rust-project-editor/releases/download/"
+            + encodeURIComponent(releaseTag)
+            + "/amd64-debian-wasi-cargo-cache.tar.gz";
+    }
+
+    private static defaultLibraryCacheKey(url: string): string {
+        const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+        const override = params.get("rustCacheUrl");
+        if (override && override.trim()) {
+            return url;
+        }
+        if (typeof window !== "undefined" && window.c2wRustLibraryCacheKey) {
+            return window.c2wRustLibraryCacheKey;
+        }
+        return url;
+    }
+
+    private static libraryCacheHydrateCommand(url: string, cacheKey: string): string {
+        const qUrl = RustContainerWrapper.shellQuote(url);
+        const qCacheKey = RustContainerWrapper.shellQuote(cacheKey);
+        return [
+            "set -e",
+            "if command -v hydrate-rust-cache >/dev/null 2>&1; then",
+            "    hydrate-rust-cache " + qUrl + " " + qCacheKey,
+            "else",
+            "    tmp_dir=$(mktemp -d /tmp/c2w-rust-cache.XXXXXX)",
+            "    trap 'rm -rf \"$tmp_dir\"' EXIT",
+            "    archive=\"$tmp_dir/cargo-cache.tar.gz\"",
+            "    printf 'hydrate-rust-cache fallback: downloading %s\\n' " + qUrl,
+            "    curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 --progress-bar " + qUrl + " -o \"$archive\"",
+            "    printf 'hydrate-rust-cache fallback: unpacking Cargo cache\\n'",
+            "    tar -xzf \"$archive\" -C /",
+            "    mkdir -p /usr/local/cargo/.c2w-cache",
+            "    printf '%s\\n' " + qCacheKey + " > /usr/local/cargo/.c2w-cache/cargo-cache.stamp",
+            "fi",
+        ].join("\n");
+    }
+
+    private static isTerminalStartupError(error: unknown): boolean {
+        const message = error instanceof Error ? error.message : String(error);
+        return /terminal is not ready|input ready marker|bash prompt|WASI runtime/i.test(message);
     }
 
     private static normalizeRemotePath(path: string): string {

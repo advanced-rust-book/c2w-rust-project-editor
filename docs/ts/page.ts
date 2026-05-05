@@ -35,6 +35,9 @@ interface BrowserFileSystemAccessWindow {
 interface ContainerManifest {
     files?: unknown;
     chunks?: unknown;
+    name?: unknown;
+    sourceHash?: unknown;
+    generatedAt?: unknown;
 }
 
 interface WasiStartConfig {
@@ -116,23 +119,21 @@ function startWasiFromManifest(
         statusElem.textContent = "Loading container manifest...";
     }
 
-    fetch(manifestFileName, { cache: "no-store", credentials: "same-origin" })
-        .then((resp) => {
-            if (!resp.ok) {
-                throw new Error("failed to load " + manifestFileName + ": HTTP " + resp.status);
-            }
-            return resp.json() as Promise<ContainerManifest>;
-        })
+    fetchContainerManifest(manifestFileName, statusElem)
         .then((manifest) => {
             let chunkSpec: WasmImageChunks;
             let chunkCount: number;
+            const manifestCacheKey = manifestCacheIdentity(manifest, manifestFileName);
 
             if (Array.isArray(manifest.files) && manifest.files.length > 0) {
                 if (!manifest.files.every((file) => typeof file === "string" && file.length > 0)) {
                     throw new Error("invalid file list in " + manifestFileName);
                 }
-                chunkSpec = manifest.files as string[];
-                chunkCount = chunkSpec.length;
+                chunkSpec = {
+                    files: manifest.files as string[],
+                    cacheKey: manifestCacheKey,
+                };
+                chunkCount = manifest.files.length;
             } else {
                 chunkCount = Number(manifest.chunks);
                 if (!Number.isInteger(chunkCount) || chunkCount <= 0) {
@@ -149,10 +150,50 @@ function startWasiFromManifest(
         .catch((err: unknown) => {
             console.error(err);
             if (statusElem) {
-                statusElem.textContent = "Container image is not built yet. Run `docker compose up --build` and reload this page.";
-                statusElem.className = "text-danger";
+                statusElem.textContent = "Unable to load the release container image. Check the release asset proxy and reload this page.";
+                setStatusClass(statusElem, true);
             }
         });
+}
+
+async function fetchContainerManifest(manifestFileName: string, statusElem: HTMLElement | null): Promise<ContainerManifest> {
+    const request = new Request(manifestFileName, { credentials: "same-origin" });
+    const cache = await openOptionalCache("c2w-container-manifests-v1");
+    const cached = await cache?.match(request);
+    if (cached) {
+        if (statusElem) {
+            statusElem.textContent = "Using cached container manifest.";
+        }
+        return cached.json() as Promise<ContainerManifest>;
+    }
+
+    const resp = await fetch(request, { cache: "no-store" });
+    if (!resp.ok) {
+        throw new Error("failed to load " + manifestFileName + ": HTTP " + resp.status);
+    }
+    await cache?.put(request, resp.clone());
+    return resp.json() as Promise<ContainerManifest>;
+}
+
+async function openOptionalCache(name: string): Promise<Cache | null> {
+    if (typeof caches === "undefined") {
+        return null;
+    }
+    try {
+        return await caches.open(name);
+    } catch (error) {
+        console.warn("container manifest cache is unavailable:", error);
+        return null;
+    }
+}
+
+function manifestCacheIdentity(manifest: ContainerManifest, manifestFileName: string): string {
+    const parts = [
+        typeof manifest.name === "string" ? manifest.name : "",
+        typeof manifest.sourceHash === "string" ? manifest.sourceHash : "",
+        typeof manifest.generatedAt === "string" ? manifest.generatedAt : "",
+    ].filter((part) => part.length > 0);
+    return parts.length > 0 ? parts.join(":") : manifestFileName;
 }
 
 function startWasi(
@@ -199,7 +240,7 @@ function startWasi(
     }
 
     worker = new Worker(workerFileName);
-    worker.addEventListener("message", handleDirectFsWorkerMessage);
+    worker.addEventListener("message", handleWasiWorkerMessage);
     postDirectFsSharedWriteBuffer(worker);
 
     let networkStack: ((event: MessageEvent<unknown>) => void) | undefined;
@@ -471,6 +512,107 @@ function handleDirectFsWorkerMessage(event: MessageEvent<unknown>): void {
     } else {
         pending.reject(new Error(response.error || "direct filesystem request failed"));
     }
+}
+
+function handleWasiWorkerMessage(event: MessageEvent<unknown>): void {
+    const message = event.data;
+    if (isWasmImageProgressMessage(message)) {
+        event.stopImmediatePropagation();
+        renderWasmImageProgress(message);
+        return;
+    }
+    handleDirectFsWorkerMessage(event);
+}
+
+function isWasmImageProgressMessage(value: unknown): value is WasmImageProgressMessage {
+    return typeof value === "object"
+        && value !== null
+        && (value as { type?: unknown }).type === "wasm-image-progress"
+        && typeof (value as { phase?: unknown }).phase === "string"
+        && typeof (value as { chunkCount?: unknown }).chunkCount === "number";
+}
+
+function renderWasmImageProgress(progress: WasmImageProgressMessage): void {
+    const terminalId = currentWasiStartConfig?.elemId || "terminal-amd64-debian";
+    const statusElem = document.getElementById(terminalId + "-status");
+    if (!statusElem) {
+        return;
+    }
+
+    const chunkLabel = progress.chunkIndex !== undefined
+        ? "chunk " + (progress.chunkIndex + 1) + "/" + progress.chunkCount
+        : progress.chunkCount + " chunks";
+    const cacheLabel = progress.cacheEnabled ? "browser cache" : "network only";
+    const readyLabel = progress.totalBytes && progress.totalBytes > 0
+        ? formatByteCount(progress.loadedBytes) + " ready"
+        : formatByteCount(progress.loadedBytes) + " ready";
+
+    setStatusClass(statusElem, progress.phase === "error");
+
+    switch (progress.phase) {
+        case "begin":
+            statusElem.textContent = "Preparing release container image from " + progress.chunkCount + " chunk(s); cache: " + cacheLabel + ".";
+            break;
+        case "size-check":
+            statusElem.textContent = "Checked release container image size: " + formatByteCount(progress.totalBytes || progress.loadedBytes) + ".";
+            break;
+        case "cache-hit":
+            statusElem.textContent = "Using cached release container " + chunkLabel + ". " + progress.cachedChunks + " cached; " + readyLabel + ".";
+            break;
+        case "download-start":
+            statusElem.textContent = "Downloading release container " + chunkLabel + ". Cached chunks will be reused on reload.";
+            break;
+        case "download-progress": {
+            const current = progress.chunkLoadedBytes !== undefined
+                ? formatByteCount(progress.chunkLoadedBytes)
+                : formatByteCount(0);
+            const total = progress.chunkTotalBytes && progress.chunkTotalBytes > 0
+                ? " / " + formatByteCount(progress.chunkTotalBytes)
+                : "";
+            statusElem.textContent = "Downloading release container " + chunkLabel + ": " + current + total + ".";
+            break;
+        }
+        case "download-complete":
+            statusElem.textContent = "Cached release container " + chunkLabel + ". " + progress.downloadedChunks + " downloaded; " + readyLabel + ".";
+            break;
+        case "assemble":
+            statusElem.textContent = "Assembling release container image from cached/downloaded chunks (" + formatByteCount(progress.loadedBytes) + ").";
+            break;
+        case "ready":
+            statusElem.textContent = "Release container image ready (" + formatByteCount(progress.loadedBytes) + "). Starting WASI runtime.";
+            window.dispatchEvent(new CustomEvent("c2w-wasi-image-ready"));
+            break;
+        case "error":
+            statusElem.textContent = progress.message || "Failed to load the release container image.";
+            break;
+    }
+}
+
+function setStatusClass(statusElem: HTMLElement, isError: boolean): void {
+    const base = statusElem.classList.contains("status-line") ? "status-line " : "";
+    statusElem.className = base + (isError ? "text-danger" : "text-muted");
+}
+
+function formatByteCount(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes < 0) {
+        return String(bytes) + " bytes";
+    }
+    if (bytes === 1) {
+        return "1 byte";
+    }
+    if (bytes < 1024) {
+        return Math.round(bytes) + " bytes";
+    }
+
+    const units = ["KiB", "MiB", "GiB", "TiB"];
+    let value = bytes / 1024;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+    return value.toFixed(precision) + " " + units[unitIndex];
 }
 
 function isDirectFsWorkerResponse(value: unknown): value is DirectFsWorkerResponse {

@@ -315,12 +315,12 @@ onmessage = (msg: MessageEvent<unknown>): void => {
     const ttyClient = new TtyClient(msg.data);
     const netParam = getWorkerNetParam();
 
-    fetchChunks((wasm) => {
-        void startFetchedTerminalWasi(wasm, ttyClient, netParam).catch((error: unknown) => {
+    void fetchChunks()
+        .then((wasm) => startFetchedTerminalWasi(wasm, ttyClient, netParam))
+        .catch((error: unknown) => {
             console.error("failed to start WASI runtime:", error);
             writeTerminalStartupError(ttyClient, error);
         });
-    });
 };
 
 async function startFetchedTerminalWasi(

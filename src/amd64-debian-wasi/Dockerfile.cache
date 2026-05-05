@@ -1,0 +1,45 @@
+FROM rust:1.88.0-slim-bookworm AS cache
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CARGO_HOME=/usr/local/cargo \
+    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    PATH=/usr/local/cargo/bin:${PATH}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        clang \
+        git \
+        libclang-dev \
+        libffi-dev \
+        libopenmpi-dev \
+        openmpi-bin \
+        pkg-config \
+        protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add wasm32-unknown-unknown
+
+COPY c2w-rust-prebundle /opt/c2w-rust-prebundle
+
+RUN cd /opt/c2w-rust-prebundle \
+    && cargo fetch --locked \
+    && cargo fetch --locked --target wasm32-unknown-unknown \
+    && CARGO_HOME=/tmp/c2w-cargo-install cargo install wasm-bindgen-cli --version 0.2.120 --locked \
+    && cp /tmp/c2w-cargo-install/bin/wasm-bindgen /usr/local/cargo/bin/ \
+    && cp /tmp/c2w-cargo-install/bin/wasm-bindgen-test-runner /usr/local/cargo/bin/ \
+    && cp /tmp/c2w-cargo-install/bin/wasm2es6js /usr/local/cargo/bin/ \
+    && rm -rf /tmp/c2w-cargo-install \
+    && mkdir -p "${CARGO_HOME}/git" \
+    && printf '[net]\noffline = true\ngit-fetch-with-cli = true\n\n[registries.crates-io]\nprotocol = "sparse"\n' > "${CARGO_HOME}/config.toml"
+
+FROM scratch AS export
+
+COPY --from=cache /usr/local/cargo/registry /usr/local/cargo/registry
+COPY --from=cache /usr/local/cargo/git /usr/local/cargo/git
+COPY --from=cache /usr/local/cargo/config.toml /usr/local/cargo/config.toml
+COPY --from=cache /usr/local/cargo/bin/wasm-bindgen /usr/local/cargo/bin/wasm-bindgen
+COPY --from=cache /usr/local/cargo/bin/wasm-bindgen-test-runner /usr/local/cargo/bin/wasm-bindgen-test-runner
+COPY --from=cache /usr/local/cargo/bin/wasm2es6js /usr/local/cargo/bin/wasm2es6js

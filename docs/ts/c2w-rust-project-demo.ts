@@ -141,6 +141,7 @@ fn main() {
 `;
 
 let lastActiveProjectEditorId = "";
+let demoLibraryCacheHydrationStarted = false;
 
 function setupEditorThemeToggle(): void {
     const shell = document.getElementById("editor-demo-shell");
@@ -189,6 +190,30 @@ function demoRuntime(): RustContainerWrapper {
     return runtime;
 }
 
+function startDemoLibraryCacheHydration(runtime: RustContainerWrapper): void {
+    if (demoLibraryCacheHydrationStarted) {
+        return;
+    }
+    demoLibraryCacheHydrationStarted = true;
+
+    void runtime.ensureLibraryCache({
+        status: "Hydrating cached Rust libraries",
+        displayCommand: "hydrate Rust library cache",
+        terminalTitle: "Hydrate Rust library cache",
+    }).then((result) => {
+        if (result.exitCode === 0) {
+            demoSetWrapperStatus("Rust library cache is ready.");
+        } else {
+            demoSetWrapperStatus("Rust library cache hydration failed.", true);
+            demoRenderResult("hydrate Rust library cache", result);
+        }
+    }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        demoSetWrapperStatus("Rust library cache hydration failed: " + message, true);
+        demoAppendOutput("ERROR hydrating Rust library cache: " + message + "\n");
+    });
+}
+
 function createRustProjectEditorDemo(): void {
     setupEditorThemeToggle();
 
@@ -199,6 +224,7 @@ function createRustProjectEditorDemo(): void {
     }
 
     const runtime = demoRuntime();
+    window.addEventListener("c2w-wasi-image-ready", () => startDemoLibraryCacheHydration(runtime), { once: true });
     const terminal = new C2WRustEditor.SharedTerminalBridge({
         statusElement: "#terminal-target-status",
         onStatus: (message, isError) => {

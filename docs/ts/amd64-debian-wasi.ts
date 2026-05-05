@@ -15,12 +15,16 @@ const RustWrapperClass = getRustContainerWrapperClass();
 const DEFAULT_PROJECT_DIR = RustWrapperClass.defaultProjectDir;
 
 function effectiveRuntimeSearch(): string {
-    if (location.search) {
-        return location.search;
+    const params = new URLSearchParams(location.search);
+    if (!params.has("args")) {
+        params.set("args", "/bin/bash");
     }
 
-    history.replaceState(null, "", DEFAULT_RUNTIME_SEARCH);
-    return DEFAULT_RUNTIME_SEARCH;
+    const nextSearch = "?" + params.toString();
+    if (nextSearch !== location.search) {
+        history.replaceState(null, "", nextSearch);
+    }
+    return nextSearch || DEFAULT_RUNTIME_SEARCH;
 }
 
 function textAreaValue(id: string): string {
@@ -1193,8 +1197,33 @@ refreshRuntimeMountStatus();
 
 const runtimeSearch = effectiveRuntimeSearch();
 const workerUrl = new URL("./dist/worker.js" + runtimeSearch, document.baseURI).href;
-const imagePrefix = new URL("./containers/amd64-debian-wasi-container", document.baseURI).href;
-const manifestUrl = new URL("./containers/amd64-debian-wasi-container.manifest.json", document.baseURI).href;
+const RELEASE_ASSET_TAG = releaseAssetTag();
+const RELEASE_REPOSITORY = "advanced-rust-book/c2w-rust-project-editor";
+const CARGO_CACHE_ASSET_FILE = "amd64-debian-wasi-cargo-cache.tar.gz";
+const RELEASE_ASSET_BASE = releaseAssetBaseUrl();
+const imagePrefix = new URL("amd64-debian-wasi-container", RELEASE_ASSET_BASE).href;
+const manifestUrl = new URL("amd64-debian-wasi-container.manifest.json", RELEASE_ASSET_BASE).href;
+
+function releaseAssetBaseUrl(): string {
+    const override = new URLSearchParams(location.search).get("containerBase");
+    const base = override && override.trim()
+        ? override.trim()
+        : new URL("./release-assets/" + RELEASE_ASSET_TAG + "/", document.baseURI).href;
+    return base.endsWith("/") ? base : base + "/";
+}
+
+function releaseAssetTag(): string {
+    const override = new URLSearchParams(location.search).get("releaseTag");
+    return override && override.trim() ? override.trim() : "1.0.1";
+}
+
+function githubReleaseAssetUrl(fileName: string): string {
+    return "https://github.com/" + RELEASE_REPOSITORY + "/releases/download/" + encodeURIComponent(RELEASE_ASSET_TAG) + "/" + fileName;
+}
+
+window.c2wRustReleaseTag = RELEASE_ASSET_TAG;
+window.c2wRustLibraryCacheUrl = githubReleaseAssetUrl(CARGO_CACHE_ASSET_FILE);
+window.c2wRustLibraryCacheKey = RELEASE_ASSET_TAG + ":" + CARGO_CACHE_ASSET_FILE;
 
 if (typeof window.startWasiFromManifest === "function") {
     window.startWasiFromManifest("terminal-amd64-debian", workerUrl, imagePrefix, manifestUrl);

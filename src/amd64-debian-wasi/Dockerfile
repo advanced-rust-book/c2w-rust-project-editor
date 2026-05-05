@@ -13,6 +13,9 @@ RUN apt-get update \
         ca-certificates \
         clang \
         coreutils \
+        curl \
+        git \
+        gzip \
         libclang-dev \
         libffi-dev \
         libopenmpi-dev \
@@ -27,12 +30,9 @@ RUN apt-get update \
 
 RUN rustup target add wasm32-unknown-unknown
 
-COPY c2w-rust-prebundle /opt/c2w-rust-prebundle
+COPY hydrate-rust-cache.sh /usr/local/bin/hydrate-rust-cache
 
-RUN cd /opt/c2w-rust-prebundle \
-    && cargo fetch --locked \
-    && cargo fetch --locked --target wasm32-unknown-unknown \
-    && cargo install wasm-bindgen-cli --version 0.2.120 --locked \
+RUN chmod +x /usr/local/bin/hydrate-rust-cache \
     && printf '[net]\noffline = true\ngit-fetch-with-cli = true\n\n[registries.crates-io]\nprotocol = "sparse"\n' > "${CARGO_HOME}/config.toml"
 
 ENV CARGO_NET_OFFLINE=true

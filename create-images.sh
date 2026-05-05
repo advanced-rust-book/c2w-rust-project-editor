@@ -382,7 +382,7 @@ build_cargo_cache_asset() {
     local tmp_archive="${DEST}/.${output_name}.$$.tar.gz"
 
     if [ ! -f "${dockerfile}" ]; then
-        echo "No Cargo cache Dockerfile for ${image_name}; skipping cache asset"
+        echo "No Rust development cache Dockerfile for ${image_name}; skipping cache asset"
         return 0
     fi
 
@@ -395,7 +395,7 @@ build_cargo_cache_asset() {
         return 0
     fi
 
-    echo "Building Cargo cache asset ${output_name}..."
+    echo "Building Rust development cache asset ${output_name}..."
     rm -rf "${tmp_root}" "${tmp_archive}" "${archive_file}" "${manifest_file}" "${hash_file}"
     mkdir -p "${tmp_output}"
 
@@ -435,7 +435,7 @@ build_cargo_cache_asset() {
         printf '}\n'
     } > "${manifest_file}"
     printf '%s\n' "${hash}" > "${hash_file}"
-    echo "Built Cargo cache asset ${archive_file} (${archive_bytes} bytes)"
+    echo "Built Rust development cache asset ${archive_file} (${archive_bytes} bytes)"
 }
 
 trap cleanup_docker_save_compat EXIT

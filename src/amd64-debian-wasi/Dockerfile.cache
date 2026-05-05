@@ -18,7 +18,13 @@ RUN apt-get update \
         openmpi-bin \
         pkg-config \
         protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf \
+        /var/lib/apt/lists/* \
+        /usr/share/doc/* \
+        /usr/share/info/* \
+        /usr/share/lintian/* \
+        /usr/share/locale/* \
+        /usr/share/man/*
 
 RUN rustup target add wasm32-unknown-unknown
 
@@ -37,9 +43,6 @@ RUN cd /opt/c2w-rust-prebundle \
 
 FROM scratch AS export
 
-COPY --from=cache /usr/local/cargo/registry /usr/local/cargo/registry
-COPY --from=cache /usr/local/cargo/git /usr/local/cargo/git
-COPY --from=cache /usr/local/cargo/config.toml /usr/local/cargo/config.toml
-COPY --from=cache /usr/local/cargo/bin/wasm-bindgen /usr/local/cargo/bin/wasm-bindgen
-COPY --from=cache /usr/local/cargo/bin/wasm-bindgen-test-runner /usr/local/cargo/bin/wasm-bindgen-test-runner
-COPY --from=cache /usr/local/cargo/bin/wasm2es6js /usr/local/cargo/bin/wasm2es6js
+COPY --from=cache /etc/alternatives /etc/alternatives
+COPY --from=cache /etc/openmpi /etc/openmpi
+COPY --from=cache /usr /usr

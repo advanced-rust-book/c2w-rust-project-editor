@@ -144,6 +144,8 @@ vite.config.ts.timestamp-*
 
 *.zip
 
+docs/containers/
+
 out.md
 
 list.md

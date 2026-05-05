@@ -28,31 +28,32 @@ After a successful release build, the useful delivery payload is:
 - `docs/dist/`: compiled browser runtime, project editor, worker, WASI, and wrapper scripts.
 - GitHub Release assets:
   - `amd64-debian-wasi-container.manifest.json` plus the split `amd64-debian-wasi-container*.wasm` runtime chunks.
-  - `amd64-debian-wasi-cargo-cache.manifest.json` and `amd64-debian-wasi-cargo-cache.tar.gz`, the hydrated Cargo registry/tool cache.
+  - `amd64-debian-wasi-cargo-cache.manifest.json` and `amd64-debian-wasi-cargo-cache.tar.gz`, the hydrated Rust toolchain, native development packages, Cargo registry/git cache, and Rust helper tools.
 - `docs/src/c2w-net-proxy.wasm`: network proxy asset used by container2wasm.
 - `docs/extras/` and `docs/src/browser_wasi_shim/`: supporting WASI assets.
 - `docs/index.html`: static demo page that wires the runtime and editor together.
 
-At runtime, the worker downloads release chunks progressively, reports chunk-level progress in the status strip, stores chunks in Cache Storage, and reuses cached chunks on reload. After the runtime instantiates, the Rust wrapper runs `hydrate-rust-cache` inside the container. That script downloads `amd64-debian-wasi-cargo-cache.tar.gz` from the same GitHub Release through the browser-backed c2w network proxy, unpacks it into `/usr/local/cargo`, and leaves Cargo in offline mode.
+At runtime, the worker downloads release chunks progressively, reports chunk-level progress in the status strip, stores chunks in Cache Storage, and reuses cached chunks on reload. After the runtime instantiates, the Rust wrapper runs `hydrate-rust-cache` inside the container. That script downloads `amd64-debian-wasi-cargo-cache.tar.gz` from the same GitHub Release through the browser-backed c2w network proxy, unpacks it into the container filesystem, and leaves Cargo in offline mode.
 
-The default browser URL for the image payload is same-origin `/release-assets/1.0.1/`, which the local Apache container proxies to GitHub's stable release download URLs. You can point at a newer release with `?releaseTag=<tag>`, or override the browser image host with `?containerBase=...` only if that alternate host is CORS-readable from the browser. The in-container Cargo cache download can be overridden with `?rustCacheUrl=...`.
+The default browser URL for the image payload is same-origin `/release-assets/1.0.1/`, which the local Apache container proxies to GitHub's stable release download URLs. You can point at a newer release with `?releaseTag=<tag>`, or override the browser image host with `?containerBase=...` only if that alternate host is CORS-readable from the browser. The in-container Rust cache download can be overridden with `?rustCacheUrl=...`.
 
-The old all-in-one `1.0.1` image is about 1.97 GiB when its chunks are assembled into a single WebAssembly module. Chromium rejects that module with a 1 GiB `WebAssembly.instantiate()` buffer limit, so this split keeps bulky Cargo cache data out of the boot image. Publish a new release from this tree and use `?releaseTag=<tag>` until the default tag is bumped.
+The old all-in-one `1.0.1` image is about 1.97 GiB when its chunks are assembled into a single WebAssembly module. Chromium rejects that module with a 1 GiB `WebAssembly.instantiate()` buffer limit, so this split keeps the bulky Rust development payload out of the boot image. Publish a new release from this tree and use `?releaseTag=<tag>` until the default tag is bumped.
 
 ## Rust Environment
 
-The browser container is built from `rust:1.88.0-slim-bookworm`. The converted c2w image contains the Rust toolchain, the shell, and system packages. Cargo registry data and installed Rust helper binaries are delivered separately in the `amd64-debian-wasi-cargo-cache.tar.gz` release asset.
+The converted c2w boot image is intentionally small. It is built from `debian:bookworm-slim` and contains only the shell plus the tools needed to start the runtime and hydrate the larger Rust development payload.
 
-Preinstalled system tools and libraries include:
+Boot image tools include:
 
-- `bash`, `build-essential`, `coreutils`, `curl`, `git`, `gzip`, `tar`, `zip`, `unzip`
-- `clang`, `libclang-dev`, `libffi-dev`
+- `bash`, `coreutils`, `curl`, `gzip`, `tar`, `zip`, `unzip`
+- `findutils`, `mawk`, `sed`, `ca-certificates`
+
+The release cache asset is built from `rust:1.88.0-slim-bookworm` and is unpacked into the running container after WebAssembly instantiation. Once hydrated, the runtime has:
+
+- Rust `1.88.0`, Cargo, rustup, and target `wasm32-unknown-unknown`
+- `build-essential`, `clang`, `libclang-dev`, `libffi-dev`
 - `openmpi-bin`, `libopenmpi-dev`
-- `pkg-config`, `protobuf-compiler`
-- Rust target `wasm32-unknown-unknown`
-
-Hydrated from the Cargo cache asset:
-
+- `git`, `pkg-config`, `protobuf-compiler`
 - `wasm-bindgen-cli` `0.2.120`
 
 Precached Cargo crates include the external libraries covered by the study material:
@@ -148,4 +149,4 @@ The container2wasm conversion can be memory-sensitive. If the hosted runner is t
 docker compose --profile local-image up --build --exit-code-from builder builder
 ```
 
-It then stages the generated `docs/containers` files, adds `SHA256SUMS.txt`, uploads a workflow artifact copy, and creates a GitHub Release containing both the WASM runtime chunks and the Cargo cache tarball.
+It then stages the generated `docs/containers` files, adds `SHA256SUMS.txt`, uploads a workflow artifact copy, and creates a GitHub Release containing both the WASM runtime chunks and the Rust development cache tarball.

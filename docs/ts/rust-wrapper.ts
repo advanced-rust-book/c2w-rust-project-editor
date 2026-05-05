@@ -2613,13 +2613,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "else",
             "    tmp_dir=$(mktemp -d /tmp/c2w-rust-cache.XXXXXX)",
             "    trap 'rm -rf \"$tmp_dir\"' EXIT",
-            "    archive=\"$tmp_dir/cargo-cache.tar.gz\"",
+            "    archive=\"$tmp_dir/rust-dev-cache.tar.gz\"",
             "    printf 'hydrate-rust-cache fallback: downloading %s\\n' " + qUrl,
             "    curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 --progress-bar " + qUrl + " -o \"$archive\"",
-            "    printf 'hydrate-rust-cache fallback: unpacking Cargo cache\\n'",
+            "    printf 'hydrate-rust-cache fallback: unpacking Rust development cache\\n'",
             "    tar -xzf \"$archive\" -C /",
             "    mkdir -p /usr/local/cargo/.c2w-cache",
-            "    printf '%s\\n' " + qCacheKey + " > /usr/local/cargo/.c2w-cache/cargo-cache.stamp",
+            "    printf '%s\\n' " + qCacheKey + " > /usr/local/cargo/.c2w-cache/rust-dev-cache.stamp",
             "fi",
         ].join("\n");
     }

@@ -203,7 +203,11 @@ source_hash() {
         printf 'artifact=%s\n' "${artifact_kind}"
         printf 'chunk=%s\n' "${WASI_MAX_CHUNK}"
         printf 'c2w_flags=%s\n' "${C2W_EXTRA_FLAGS}"
-        printf 'script_version=2026-05-05-rust-base-plus-cargo-cache\n'
+        if [ "${artifact_kind}" = "cargo-cache" ]; then
+            printf 'script_version=2026-05-05-rust-dev-cache-tar-export\n'
+        else
+            printf 'script_version=2026-05-05-rust-base-plus-cargo-cache\n'
+        fi
         if command -v "${C2W}" >/dev/null 2>&1; then
             "${C2W}" --version 2>/dev/null || true
         fi
@@ -380,6 +384,7 @@ build_cargo_cache_asset() {
     local tmp_root="${DEST}/.${output_name}.$$"
     local tmp_output="${tmp_root}/rootfs"
     local tmp_archive="${DEST}/.${output_name}.$$.tar.gz"
+    local exported_archive="${tmp_output}/rust-dev-cache.tar.gz"
 
     if [ ! -f "${dockerfile}" ]; then
         echo "No Rust development cache Dockerfile for ${image_name}; skipping cache asset"
@@ -407,7 +412,11 @@ build_cargo_cache_asset() {
         --output "type=local,dest=${tmp_output}" \
         "${image_dir}"
 
-    tar -C "${tmp_output}" -czf "${tmp_archive}" .
+    if [ -f "${exported_archive}" ]; then
+        mv "${exported_archive}" "${tmp_archive}"
+    else
+        tar -C "${tmp_output}" -czf "${tmp_archive}" .
+    fi
     rm -rf "${tmp_root}"
     mv "${tmp_archive}" "${archive_file}"
 

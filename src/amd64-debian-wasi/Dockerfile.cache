@@ -41,8 +41,12 @@ RUN cd /opt/c2w-rust-prebundle \
     && mkdir -p "${CARGO_HOME}/git" \
     && printf '[net]\noffline = true\ngit-fetch-with-cli = true\n\n[registries.crates-io]\nprotocol = "sparse"\n' > "${CARGO_HOME}/config.toml"
 
+RUN mkdir -p /out \
+    && tar -C / -czf /out/rust-dev-cache.tar.gz \
+        etc/alternatives \
+        etc/openmpi \
+        usr
+
 FROM scratch AS export
 
-COPY --from=cache /etc/alternatives /etc/alternatives
-COPY --from=cache /etc/openmpi /etc/openmpi
-COPY --from=cache /usr /usr
+COPY --from=cache /out/rust-dev-cache.tar.gz /rust-dev-cache.tar.gz

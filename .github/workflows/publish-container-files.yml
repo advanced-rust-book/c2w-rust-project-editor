@@ -1,6 +1,9 @@
 name: Publish container files
 
 on:
+  push:
+    tags:
+      - "*"
   workflow_dispatch:
     inputs:
       release_tag:
@@ -16,7 +19,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-container-files-${{ inputs.release_tag }}
+  group: publish-container-files-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -26,8 +29,8 @@ jobs:
     timeout-minutes: 360
 
     env:
-      RELEASE_TAG: ${{ inputs.release_tag }}
-      RELEASE_NAME: ${{ inputs.release_name }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      RELEASE_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.release_name || github.ref_name }}
 
     steps:
       - name: Check out selected branch
@@ -57,6 +60,12 @@ jobs:
             echo "No release assets were generated."
             exit 1
           fi
+
+          test -f release-container-files/amd64-debian-wasi-container.manifest.json
+          test -f release-container-files/amd64-debian-wasi-cargo-cache.manifest.json
+          test -f release-container-files/c2w-net-proxy.wasm
+          find release-container-files -maxdepth 1 -type f -name 'amd64-debian-wasi-container*.wasm' | grep -q .
+          find release-container-files -maxdepth 1 -type f -name 'amd64-debian-wasi-cargo-cache*.tar.gz.part' | grep -q .
 
           (
             cd release-container-files

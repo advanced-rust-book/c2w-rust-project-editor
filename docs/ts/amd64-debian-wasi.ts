@@ -1198,32 +1198,24 @@ refreshRuntimeMountStatus();
 const runtimeSearch = effectiveRuntimeSearch();
 const workerUrl = new URL("./dist/worker.js" + runtimeSearch, document.baseURI).href;
 const RELEASE_ASSET_TAG = releaseAssetTag();
-const RELEASE_REPOSITORY = "advanced-rust-book/c2w-rust-project-editor";
-const CARGO_CACHE_ASSET_FILE = "amd64-debian-wasi-cargo-cache.tar.gz";
+const CARGO_CACHE_MANIFEST_FILE = "amd64-debian-wasi-cargo-cache.manifest.json";
 const RELEASE_ASSET_BASE = releaseAssetBaseUrl();
 const imagePrefix = new URL("amd64-debian-wasi-container", RELEASE_ASSET_BASE).href;
 const manifestUrl = new URL("amd64-debian-wasi-container.manifest.json", RELEASE_ASSET_BASE).href;
+const cargoCacheManifestUrl = new URL(CARGO_CACHE_MANIFEST_FILE, RELEASE_ASSET_BASE).href;
 
 function releaseAssetBaseUrl(): string {
-    const override = new URLSearchParams(location.search).get("containerBase");
-    const base = override && override.trim()
-        ? override.trim()
-        : new URL("./release-assets/" + RELEASE_ASSET_TAG + "/", document.baseURI).href;
-    return base.endsWith("/") ? base : base + "/";
+    return new URL("./release-assets/" + RELEASE_ASSET_TAG + "/", document.baseURI).href;
 }
 
 function releaseAssetTag(): string {
     const override = new URLSearchParams(location.search).get("releaseTag");
-    return override && override.trim() ? override.trim() : "1.0.1";
-}
-
-function githubReleaseAssetUrl(fileName: string): string {
-    return "https://github.com/" + RELEASE_REPOSITORY + "/releases/download/" + encodeURIComponent(RELEASE_ASSET_TAG) + "/" + fileName;
+    return override && override.trim() ? override.trim() : "1.0.3";
 }
 
 window.c2wRustReleaseTag = RELEASE_ASSET_TAG;
-window.c2wRustLibraryCacheUrl = githubReleaseAssetUrl(CARGO_CACHE_ASSET_FILE);
-window.c2wRustLibraryCacheKey = RELEASE_ASSET_TAG + ":" + CARGO_CACHE_ASSET_FILE;
+window.c2wRustLibraryCacheUrl = cargoCacheManifestUrl;
+window.c2wRustLibraryCacheKey = RELEASE_ASSET_TAG + ":" + CARGO_CACHE_MANIFEST_FILE;
 
 if (typeof window.startWasiFromManifest === "function") {
     window.startWasiFromManifest("terminal-amd64-debian", workerUrl, imagePrefix, manifestUrl);

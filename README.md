@@ -10,6 +10,8 @@ docker compose up --build
 
 That command builds the TypeScript browser assets, serves the static experience on `http://localhost:8080`, and loads the prebuilt c2w runtime chunks from the configured GitHub Release.
 
+`docker compose up --build` runs in the foreground by design. After the `assets` service exits successfully, the `runner` service keeps Apache attached to the terminal so the browser page stays available. Stop it with one `Ctrl+C`, or from another terminal with `docker compose down --remove-orphans`.
+
 ## What Compose Delivers
 
 `docker compose up --build` runs two services by default:
@@ -28,16 +30,16 @@ After a successful release build, the useful delivery payload is:
 - `docs/dist/`: compiled browser runtime, project editor, worker, WASI, and wrapper scripts.
 - GitHub Release assets:
   - `amd64-debian-wasi-container.manifest.json` plus the split `amd64-debian-wasi-container*.wasm` runtime chunks.
-  - `amd64-debian-wasi-cargo-cache.manifest.json` and `amd64-debian-wasi-cargo-cache.tar.gz`, the hydrated Rust toolchain, native development packages, Cargo registry/git cache, and Rust helper tools.
+  - `amd64-debian-wasi-cargo-cache.manifest.json` plus the split `amd64-debian-wasi-cargo-cache*.tar.gz.part` chunks, the hydrated Rust toolchain, native development packages, Cargo registry/git cache, and Rust helper tools.
 - `docs/src/c2w-net-proxy.wasm`: network proxy asset used by container2wasm.
 - `docs/extras/` and `docs/src/browser_wasi_shim/`: supporting WASI assets.
 - `docs/index.html`: static demo page that wires the runtime and editor together.
 
-At runtime, the worker downloads release chunks progressively, reports chunk-level progress in the status strip, stores chunks in Cache Storage, and reuses cached chunks on reload. After the runtime instantiates, the Rust wrapper runs `hydrate-rust-cache` inside the container. That script downloads `amd64-debian-wasi-cargo-cache.tar.gz` from the same GitHub Release through the browser-backed c2w network proxy, unpacks it into the container filesystem, and leaves Cargo in offline mode.
+At runtime, the worker downloads release chunks progressively, reports chunk-level progress in the status strip, stores chunks in Cache Storage, and reuses cached chunks on reload. After the runtime instantiates, the Rust wrapper runs `hydrate-rust-cache` inside the container. That script downloads `amd64-debian-wasi-cargo-cache.manifest.json` from the GitHub Release asset base, downloads and assembles the listed 47 MB cache chunks, verifies the assembled archive when manifest metadata is present, unpacks it into the container filesystem, and leaves Cargo in offline mode.
 
-The default browser URL for the image payload is same-origin `/release-assets/1.0.1/`, which the local Apache container proxies to GitHub's stable release download URLs. You can point at a newer release with `?releaseTag=<tag>`, or override the browser image host with `?containerBase=...` only if that alternate host is CORS-readable from the browser. The in-container Rust cache download can be overridden with `?rustCacheUrl=...`.
+The default browser URL for the image payload and the Rust cache manifest/chunks is same-origin `/release-assets/1.0.3/`, which the local Apache container proxies to GitHub's stable release download URLs. You can point at another GitHub Release with `?releaseTag=<tag>`.
 
-The old all-in-one `1.0.1` image is about 1.97 GiB when its chunks are assembled into a single WebAssembly module. Chromium rejects that module with a 1 GiB `WebAssembly.instantiate()` buffer limit, so this split keeps the bulky Rust development payload out of the boot image. Publish a new release from this tree and use `?releaseTag=<tag>` until the default tag is bumped.
+The old all-in-one `1.0.1` image is about 1.97 GiB when its chunks are assembled into a single WebAssembly module. Chromium rejects that module with a 1 GiB `WebAssembly.instantiate()` buffer limit. Release `1.0.3` is the current split payload: boot image chunks plus the chunked Rust development cache archive.
 
 ## Rust Environment
 
@@ -91,6 +93,8 @@ Start the full demo:
 ```powershell
 docker compose up --build
 ```
+
+The command is ready when the `runner` service prints `Ready: http://localhost:8080`; it will then stay attached until you stop the local server.
 
 Open:
 
@@ -149,4 +153,4 @@ The container2wasm conversion can be memory-sensitive. If the hosted runner is t
 docker compose --profile local-image up --build --exit-code-from builder builder
 ```
 
-It then stages the generated `docs/containers` files, adds `SHA256SUMS.txt`, uploads a workflow artifact copy, and creates a GitHub Release containing both the WASM runtime chunks and the Rust development cache tarball.
+It then stages the generated `docs/containers` files, verifies that both runtime and Rust cache manifests/chunks exist, adds `SHA256SUMS.txt`, uploads a workflow artifact copy, and creates a GitHub Release containing both the WASM runtime chunks and the chunked Rust development cache archive.

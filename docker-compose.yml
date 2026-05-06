@@ -46,9 +46,12 @@ services:
 
   runner:
     image: httpd:2.4-alpine
+    init: true
     depends_on:
       assets:
         condition: service_completed_successfully
+    environment:
+      HTTP_PORT: ${HTTP_PORT:-8080}
     ports:
       - "${HTTP_PORT:-8080}:80"
     volumes:
@@ -64,6 +67,8 @@ services:
         sed -i 's/^#\(LoadModule socache_shmcb_module modules\/mod_socache_shmcb.so\)/\1/' /usr/local/apache2/conf/httpd.conf
         sed -i 's/^#\(LoadModule ssl_module modules\/mod_ssl.so\)/\1/' /usr/local/apache2/conf/httpd.conf
         cat > /usr/local/apache2/conf/extra/container2wasm.conf <<'EOF'
+        ServerName localhost
+        SSLSessionCache "shmcb:/usr/local/apache2/logs/ssl_scache(512000)"
         AddType application/wasm .wasm
         SSLProxyEngine On
         ProxyRequests Off
@@ -81,4 +86,5 @@ services:
         if ! grep -q 'container2wasm.conf' /usr/local/apache2/conf/httpd.conf; then
           echo 'Include conf/extra/container2wasm.conf' >> /usr/local/apache2/conf/httpd.conf
         fi
-        httpd-foreground
+        printf '\nReady: http://localhost:%s\nPress Ctrl+C once to stop the foreground server.\n\n' "$$HTTP_PORT"
+        exec httpd-foreground

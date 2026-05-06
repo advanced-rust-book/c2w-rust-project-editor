@@ -2572,31 +2572,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     private static defaultLibraryCacheUrl(): string {
         const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
-        const override = params.get("rustCacheUrl");
-        if (override && override.trim()) {
-            return override.trim();
-        }
         if (typeof window !== "undefined" && window.c2wRustLibraryCacheUrl) {
             return window.c2wRustLibraryCacheUrl;
         }
 
+        const assetFile = "amd64-debian-wasi-cargo-cache.manifest.json";
         const releaseOverride = params.get("releaseTag");
         const releaseTag = releaseOverride && releaseOverride.trim()
             ? releaseOverride.trim()
             : typeof window !== "undefined" && window.c2wRustReleaseTag
             ? window.c2wRustReleaseTag
-            : "1.0.1";
+            : "1.0.3";
+        if (typeof document !== "undefined" && document.baseURI) {
+            return new URL("./release-assets/" + encodeURIComponent(releaseTag) + "/" + assetFile, document.baseURI).href;
+        }
         return "https://github.com/advanced-rust-book/c2w-rust-project-editor/releases/download/"
             + encodeURIComponent(releaseTag)
-            + "/amd64-debian-wasi-cargo-cache.tar.gz";
+            + "/" + assetFile;
     }
 
     private static defaultLibraryCacheKey(url: string): string {
-        const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
-        const override = params.get("rustCacheUrl");
-        if (override && override.trim()) {
-            return url;
-        }
         if (typeof window !== "undefined" && window.c2wRustLibraryCacheKey) {
             return window.c2wRustLibraryCacheKey;
         }
@@ -2608,14 +2603,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         const qCacheKey = RustContainerWrapper.shellQuote(cacheKey);
         return [
             "set -e",
-            "if command -v hydrate-rust-cache >/dev/null 2>&1; then",
+            "if command -v hydrate-rust-cache >/dev/null 2>&1 && grep -q 'download_chunked_archive' \"$(command -v hydrate-rust-cache)\" 2>/dev/null; then",
             "    hydrate-rust-cache " + qUrl + " " + qCacheKey,
             "else",
             "    tmp_dir=$(mktemp -d /tmp/c2w-rust-cache.XXXXXX)",
             "    trap 'rm -rf \"$tmp_dir\"' EXIT",
             "    archive=\"$tmp_dir/rust-dev-cache.tar.gz\"",
-            "    printf 'hydrate-rust-cache fallback: downloading %s\\n' " + qUrl,
-            "    curl -fL --retry 3 --retry-delay 2 --connect-timeout 30 --progress-bar " + qUrl + " -o \"$archive\"",
+            "    manifest=\"$tmp_dir/rust-dev-cache.manifest.json\"",
+            "    curl_fetch() { curl -fL --retry 6 --retry-all-errors --retry-delay 2 --retry-max-time 300 --connect-timeout 30 --no-progress-meter \"$1\" -o \"$2\"; }",
+            "    manifest_string() { sed -n \"s/.*\\\"$1\\\"[[:space:]]*:[[:space:]]*\\\"\\\\([^\\\"]*\\\\)\\\".*/\\\\1/p\" \"$manifest\" | sed -n '1p'; }",
+            "    manifest_number() { sed -n \"s/.*\\\"$1\\\"[[:space:]]*:[[:space:]]*\\\\([0-9][0-9]*\\\\).*/\\\\1/p\" \"$manifest\" | sed -n '1p'; }",
+            "    case " + qUrl + " in",
+            "        *.manifest.json)",
+            "            printf 'hydrate-rust-cache fallback: downloading manifest %s\\n' " + qUrl,
+            "            curl_fetch " + qUrl + " \"$manifest\"",
+            "            base_url=" + qUrl,
+            "            base_url=\"${base_url%/*}/\"",
+            "            expected_hash=$(manifest_string archiveHash)",
+            "            expected_bytes=$(manifest_number bytes)",
+            "            files=$(sed -n '/\"files\"[[:space:]]*:/,/\\]/{ s/.*\"\\([^\"]*\\)\".*/\\1/p }' \"$manifest\")",
+            "            if [ -z \"$files\" ]; then printf 'hydrate-rust-cache fallback: manifest does not list cache chunks\\n' >&2; exit 1; fi",
+            "            : > \"$archive\"",
+            "            part_index=0",
+            "            while IFS= read -r file; do",
+            "                [ -n \"$file\" ] || continue",
+            "                case \"$file\" in /*|*://*|*..*) printf 'hydrate-rust-cache fallback: refusing unsafe manifest file entry: %s\\n' \"$file\" >&2; exit 1 ;; esac",
+            "                part_index=$((part_index + 1))",
+            "                part=\"$tmp_dir/cache-part-$part_index\"",
+            "                printf 'hydrate-rust-cache fallback: downloading cache chunk %s: %s\\n' \"$part_index\" \"$file\"",
+            "                curl_fetch \"${base_url}${file}\" \"$part\"",
+            "                cat \"$part\" >> \"$archive\"",
+            "                rm -f \"$part\"",
+            "            done <<EOF",
+            "$files",
+            "EOF",
+            "            actual_bytes=$(wc -c < \"$archive\" | tr -d '[:space:]')",
+            "            if [ -n \"$expected_bytes\" ] && [ \"$actual_bytes\" != \"$expected_bytes\" ]; then printf 'hydrate-rust-cache fallback: assembled archive size mismatch: expected %s, got %s\\n' \"$expected_bytes\" \"$actual_bytes\" >&2; exit 1; fi",
+            "            if [ -n \"$expected_hash\" ]; then actual_hash=$(sha256sum \"$archive\" | awk '{print $1}'); if [ \"$actual_hash\" != \"$expected_hash\" ]; then printf 'hydrate-rust-cache fallback: assembled archive sha256 mismatch: expected %s, got %s\\n' \"$expected_hash\" \"$actual_hash\" >&2; exit 1; fi; fi",
+            "            ;;",
+            "        *)",
+            "            printf 'hydrate-rust-cache fallback: downloading %s\\n' " + qUrl,
+            "            curl_fetch " + qUrl + " \"$archive\"",
+            "            ;;",
+            "    esac",
             "    printf 'hydrate-rust-cache fallback: unpacking Rust development cache\\n'",
             "    tar -xzf \"$archive\" -C /",
             "    mkdir -p /usr/local/cargo/.c2w-cache",

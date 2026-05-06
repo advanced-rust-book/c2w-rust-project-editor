@@ -105,6 +105,20 @@ namespace C2WRustEditor {
             return this.activeProjectDir;
         }
 
+        selectProject(projectDir: string, label?: string): boolean {
+            const cleanDir = projectDir.trim();
+            if (!cleanDir) {
+                this.setStatus("Choose a project directory before activating the terminal.", true);
+                return false;
+            }
+
+            this.activeProjectDir = cleanDir;
+            this.activeProjectApplied = false;
+            const target = label ? label + " at " + cleanDir : cleanDir;
+            this.setStatus("Terminal target: " + target + ".");
+            return true;
+        }
+
         activateProject(projectDir: string, label?: string, force = false): boolean {
             const cleanDir = projectDir.trim();
             if (!cleanDir) {
@@ -407,10 +421,11 @@ namespace C2WRustEditor {
 
         activate(): void {
             this.options.onActivate?.(this);
-            this.terminal.activateProject(this.projectDir, this.options.project.title);
             if (this.isTerminalTabActive()) {
+                this.terminal.activateProject(this.projectDir, this.options.project.title);
                 this.dockTerminal();
             } else {
+                this.terminal.selectProject(this.projectDir, this.options.project.title);
                 this.terminal.releaseTerminal(this.terminalDock);
             }
         }
@@ -435,6 +450,7 @@ namespace C2WRustEditor {
 
             try {
                 await this.enqueueEditorTask(async () => {
+                    await this.ensureRustEnvironmentReady("running " + this.options.project.title);
                     const cargoTab = this.requireCargoTab();
                     const cargoHash = hashText(this.state[cargoTab.id]);
                     const shouldFetch = this.lastFetchedCargoHash() !== cargoHash;
@@ -505,6 +521,7 @@ namespace C2WRustEditor {
 
             try {
                 await this.enqueueEditorTask(async () => {
+                    await this.ensureRustEnvironmentReady("creating the project zip");
                     await this.writeTabsToContainer(this.tabs.length + 1, 1);
                     const exported = await this.runtime.exportFolder(this.projectDir, {
                         step: { current: this.tabs.length + 1, total: this.tabs.length + 1, label: "Create project zip" },
@@ -698,6 +715,7 @@ namespace C2WRustEditor {
             const tabIds = Array.from(this.pendingAutosaveTabIds);
             this.pendingAutosaveTabIds.clear();
             await this.enqueueEditorTask(async () => {
+                await this.ensureRustEnvironmentReady("syncing editor files");
                 for (const tabId of tabIds) {
                     const tab = this.tabs.find((candidate) => candidate.id === tabId);
                     if (!tab) {
@@ -849,7 +867,7 @@ namespace C2WRustEditor {
             const terminalButton = document.createElement("button");
             terminalButton.type = "button";
             terminalButton.className = "c2w-tab terminal" + (this.isTerminalTabActive() ? " active" : "");
-            terminalButton.disabled = this.busy || this.isGlobalRunActive();
+            terminalButton.disabled = this.busy || this.isGlobalRunActive() || isInitialSyncBlocking();
             terminalButton.title = "Terminal input scoped to " + this.projectDir;
             terminalButton.textContent = "Terminal";
             terminalButton.addEventListener("click", () => this.switchTab(TERMINAL_TAB_ID));
@@ -1087,7 +1105,7 @@ namespace C2WRustEditor {
             for (const button of this.actionButtons) {
                 const kind = button.dataset.c2wButtonKind || "";
                 const blocksDuringOtherRun = kind === "load" || kind === "download" || kind === "run";
-                const blocksDuringInitialSync = kind === "run";
+                const blocksDuringInitialSync = kind === "load" || kind === "download" || kind === "run";
                 button.disabled = this.busy
                     || (blockedByGlobalRun && blocksDuringOtherRun)
                     || (blockedByInitialSync && blocksDuringInitialSync);
@@ -1143,6 +1161,19 @@ namespace C2WRustEditor {
                 throw new Error("project editor requires a Cargo.toml tab to run with Cargo");
             }
             return tab;
+        }
+
+        private async ensureRustEnvironmentReady(reason: string): Promise<void> {
+            this.setStatus("Hydrating Rust library cache before " + reason + "...");
+            const result = await this.runtime.ensureLibraryCache({
+                status: "Hydrating Rust library cache before " + reason,
+                displayCommand: "hydrate Rust library cache",
+                terminalTitle: "Hydrate Rust library cache",
+            });
+            if (result.exitCode !== 0) {
+                throw new Error("failed to hydrate Rust library cache:\n" + (resultText(result) || "exit code " + result.exitCode));
+            }
+            this.addLog("info", "Rust library cache ready for " + reason + ".");
         }
 
         private fetchedHashKey(): string {

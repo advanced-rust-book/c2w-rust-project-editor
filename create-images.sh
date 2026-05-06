@@ -204,7 +204,7 @@ source_hash() {
         printf 'chunk=%s\n' "${WASI_MAX_CHUNK}"
         printf 'c2w_flags=%s\n' "${C2W_EXTRA_FLAGS}"
         if [ "${artifact_kind}" = "cargo-cache" ]; then
-            printf 'script_version=2026-05-05-rust-dev-cache-tar-export\n'
+            printf 'script_version=2026-05-06-rust-dev-cache-chunked-tar-export\n'
         else
             printf 'script_version=2026-05-05-rust-base-plus-cargo-cache\n'
         fi
@@ -260,6 +260,7 @@ cleanup_removed_images() {
         "${DEST}"/*-container.manifest.json
         "${DEST}"/.*-container.sha256
         "${DEST}"/*-cargo-cache.tar.gz
+        "${DEST}"/*-cargo-cache*.tar.gz.part
         "${DEST}"/*-cargo-cache.manifest.json
         "${DEST}"/.*-cargo-cache.sha256
     )
@@ -381,6 +382,7 @@ build_cargo_cache_asset() {
     local hash_file="${DEST}/.${output_name}.sha256"
     local manifest_file="${DEST}/${output_name}.manifest.json"
     local archive_file="${DEST}/${output_name}.tar.gz"
+    local chunk_prefix="${DEST}/${output_name}"
     local tmp_root="${DEST}/.${output_name}.$$"
     local tmp_output="${tmp_root}/rootfs"
     local tmp_archive="${DEST}/.${output_name}.$$.tar.gz"
@@ -395,13 +397,13 @@ build_cargo_cache_asset() {
         && [ -f "${hash_file}" ] \
         && [ "$(cat "${hash_file}")" = "${hash}" ] \
         && [ -f "${manifest_file}" ] \
-        && [ -f "${archive_file}" ]; then
-        echo "Skipping ${output_name}; cache inputs unchanged and archive already exists in ${DEST}"
+        && compgen -G "${chunk_prefix}*.tar.gz.part" >/dev/null; then
+        echo "Skipping ${output_name}; cache inputs unchanged and chunked archive already exists in ${DEST}"
         return 0
     fi
 
     echo "Building Rust development cache asset ${output_name}..."
-    rm -rf "${tmp_root}" "${tmp_archive}" "${archive_file}" "${manifest_file}" "${hash_file}"
+    rm -rf "${tmp_root}" "${tmp_archive}" "${archive_file}" "${manifest_file}" "${hash_file}" "${chunk_prefix}"*.tar.gz.part
     mkdir -p "${tmp_output}"
 
     "${DOCKER}" buildx build \
@@ -418,14 +420,26 @@ build_cargo_cache_asset() {
         tar -C "${tmp_output}" -czf "${tmp_archive}" .
     fi
     rm -rf "${tmp_root}"
-    mv "${tmp_archive}" "${archive_file}"
 
     local archive_sha
     local archive_bytes
     local generated_at
-    archive_sha="$(sha256sum "${archive_file}" | awk '{print $1}')"
-    archive_bytes="$(wc -c < "${archive_file}" | tr -d '[:space:]')"
+    archive_sha="$(sha256sum "${tmp_archive}" | awk '{print $1}')"
+    archive_bytes="$(wc -c < "${tmp_archive}" | tr -d '[:space:]')"
     generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+    split -d -b "${WASI_MAX_CHUNK}" --additional-suffix=.tar.gz.part "${tmp_archive}" "${chunk_prefix}"
+    rm -f "${tmp_archive}"
+
+    local chunk_paths=()
+    shopt -s nullglob
+    chunk_paths=("${chunk_prefix}"*.tar.gz.part)
+    shopt -u nullglob
+    if [ "${#chunk_paths[@]}" -eq 0 ]; then
+        echo "split did not create any chunks for ${output_name}"
+        exit 1
+    fi
+    mapfile -t chunk_paths < <(printf '%s\n' "${chunk_paths[@]}" | sort)
 
     {
         printf '{\n'
@@ -434,17 +448,28 @@ build_cargo_cache_asset() {
         printf '  "target": "cargo-cache",\n'
         printf '  "arch": "%s",\n' "${target_arch}"
         printf '  "format": "tar.gz",\n'
+        printf '  "chunkSize": "%s",\n' "${WASI_MAX_CHUNK}"
+        printf '  "chunks": %s,\n' "${#chunk_paths[@]}"
         printf '  "sourceHash": "%s",\n' "${hash}"
         printf '  "archiveHash": "%s",\n' "${archive_sha}"
         printf '  "bytes": %s,\n' "${archive_bytes}"
         printf '  "generatedAt": "%s",\n' "${generated_at}"
         printf '  "files": [\n'
-        printf '    "%s.tar.gz"\n' "${output_name}"
+        local idx
+        for idx in "${!chunk_paths[@]}"; do
+            local file_name
+            local comma=","
+            file_name="$(basename "${chunk_paths[${idx}]}")"
+            if [ "${idx}" -eq "$((${#chunk_paths[@]} - 1))" ]; then
+                comma=""
+            fi
+            printf '    "%s"%s\n' "${file_name}" "${comma}"
+        done
         printf '  ]\n'
         printf '}\n'
     } > "${manifest_file}"
     printf '%s\n' "${hash}" > "${hash_file}"
-    echo "Built Rust development cache asset ${archive_file} (${archive_bytes} bytes)"
+    echo "Built Rust development cache asset ${output_name} as ${#chunk_paths[@]} chunk(s) (${archive_bytes} bytes)"
 }
 
 trap cleanup_docker_save_compat EXIT

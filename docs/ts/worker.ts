@@ -352,7 +352,6 @@ async function startFetchedTerminalWasi(
             "SSL_CERT_FILE=/.wasmenv/proxy.crt",
             "GIT_SSL_CAINFO=/.wasmenv/proxy.crt",
             "CARGO_HTTP_CAINFO=/.wasmenv/proxy.crt",
-            "CARGO_NET_GIT_FETCH_WITH_CLI=true",
             "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse",
             "https_proxy=http://192.168.127.253:80",
             "http_proxy=http://192.168.127.253:80",

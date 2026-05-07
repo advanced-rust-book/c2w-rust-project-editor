@@ -308,7 +308,7 @@
       color: #c2410c;
     }
 
-    .runtime-hidden {
+    .runtime-output-hidden {
       position: absolute;
       left: -10000px;
       top: 0;
@@ -328,6 +328,14 @@
     .terminal-panel,
     .log-panel {
       overflow: hidden;
+    }
+
+    .runtime-debug-panel {
+      margin-top: 16px;
+    }
+
+    .runtime-debug-panel .panel-body {
+      padding: 12px;
     }
 
     .panel-header {
@@ -425,11 +433,27 @@
     }
 
     .terminal-shell.c2w-terminal-undocked {
-      display: none;
+      display: block;
+      min-height: 142px;
     }
 
     .terminal-shell.c2w-terminal-undocked + .terminal-send {
       display: none;
+    }
+
+    .terminal-shell.c2w-terminal-undocked #terminal-amd64-debian {
+      display: none;
+    }
+
+    .terminal-shell.c2w-terminal-undocked::after {
+      content: "Terminal is docked in the active editor tab.";
+      display: grid;
+      min-height: 96px;
+      place-items: center;
+      border-top: 1px solid #263244;
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 700;
     }
 
     .terminal-send,
@@ -987,10 +1011,10 @@
     <section class="app-bar">
       <div class="app-title">
         <h1>C2W Rust project editor library demo</h1>
-        <p>Two independent Cargo project editors share one browser container terminal and one Rust wrapper runtime. Default assets load from GitHub Release 1.0.3.</p>
+        <p>Two independent Cargo project editors share one browser container terminal and one Rust wrapper runtime. Default assets load from the same static container bundle.</p>
       </div>
       <aside class="status-strip" aria-label="Runtime status">
-        <div class="status-line">Release 1.0.3: runtime chunks plus Rust cache manifest.</div>
+        <div class="status-line">Release 1.0.4: single reduced Rust c2w image, no runtime archive.</div>
         <div id="rust-wrapper-status" class="status-line">Loading c2w runtime...</div>
         <div id="terminal-target-status" class="status-line">No editor is active yet.</div>
         <div id="terminal-amd64-debian-status" class="status-line">Terminal not started yet.</div>
@@ -1027,7 +1051,7 @@ C2WRustEditor.createProjectEditor({
       <div class="editor-toolbar">
         <div class="editor-toolbar-title">
           <strong>Project editor examples</strong>
-          <span>Terminal opens as a tab inside the active editor; page-level runtime panels stay hidden.</span>
+          <span>The bottom terminal is the shared debug view for the same browser container used by both editors.</span>
         </div>
         <div class="editor-theme-toggle" aria-label="Editor theme">
           <button type="button" data-editor-theme="night" aria-pressed="true">Night</button>
@@ -1040,27 +1064,36 @@ C2WRustEditor.createProjectEditor({
       </section>
     </section>
 
-    <section class="runtime-hidden">
-      <div class="terminal-shell">
-        <div class="terminal-header">
-          <span>/bin/bash inside c2w</span>
-          <span>shared runtime</span>
+    <section class="runtime-debug-panel terminal-panel" aria-label="Shared c2w debug terminal">
+      <div class="panel-header">
+        <div class="panel-title">
+          <strong>Shared c2w debug terminal</strong>
+          <span>Same /bin/bash session, filesystem, and Rust cache used by the project editors.</span>
         </div>
-        <div id="terminal-amd64-debian"></div>
+        <button id="clear-terminal-button" class="button secondary" type="button">Clear</button>
       </div>
-      <pre id="rust-wrapper-output"></pre>
+      <div class="panel-body">
+        <div class="terminal-shell">
+          <div class="terminal-header">
+            <span>/bin/bash inside c2w</span>
+            <span>interactive runtime</span>
+          </div>
+          <div id="terminal-amd64-debian"></div>
+        </div>
+      </div>
     </section>
+    <pre id="rust-wrapper-output" class="runtime-output-hidden" aria-hidden="true"></pre>
   </main>
 
-  <script src="./dist/coi-config.js?v=20260506-release-1-0-3"></script>
+  <script src="./dist/coi-config.js?v=20260506-startup-ready"></script>
   <script src="./coi-serviceworker.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-pty@0.9.4/index.js"></script>
-  <script src="./dist/stack.js?v=20260506-release-1-0-3"></script>
-  <script src="./dist/page.js?v=20260506-release-1-0-3"></script>
-  <script src="./dist/rust-wrapper.js?v=20260506-release-1-0-3"></script>
-  <script src="./dist/c2w-rust-project-editor.js?v=20260506-release-1-0-3"></script>
-  <script src="./dist/amd64-debian-wasi.js?v=20260506-release-1-0-3"></script>
-  <script src="./dist/c2w-rust-project-demo.js?v=20260506-release-1-0-3"></script>
+  <script src="./dist/stack.js?v=20260506-startup-ready"></script>
+  <script src="./dist/page.js?v=20260506-startup-ready"></script>
+  <script src="./dist/rust-wrapper.js?v=20260506-startup-ready"></script>
+  <script src="./dist/c2w-rust-project-editor.js?v=20260506-startup-ready"></script>
+  <script src="./dist/amd64-debian-wasi.js?v=20260506-startup-ready"></script>
+  <script src="./dist/c2w-rust-project-demo.js?v=20260506-startup-ready"></script>
 </body>
 </html>

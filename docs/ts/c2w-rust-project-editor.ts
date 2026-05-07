@@ -212,6 +212,9 @@ namespace C2WRustEditor {
             } else {
                 this.originalTerminalParent.appendChild(this.terminalElement);
             }
+            if (this.originalTerminalParent instanceof HTMLElement) {
+                this.fitTerminal(this.originalTerminalParent);
+            }
         }
 
         focus(): void {
@@ -1164,16 +1167,16 @@ namespace C2WRustEditor {
         }
 
         private async ensureRustEnvironmentReady(reason: string): Promise<void> {
-            this.setStatus("Hydrating Rust library cache before " + reason + "...");
+            this.setStatus("Checking preloaded Rust toolchain before " + reason + "...");
             const result = await this.runtime.ensureLibraryCache({
-                status: "Hydrating Rust library cache before " + reason,
-                displayCommand: "hydrate Rust library cache",
-                terminalTitle: "Hydrate Rust library cache",
+                status: "Checking preloaded Rust toolchain before " + reason,
+                displayCommand: "check preloaded Rust toolchain",
+                terminalTitle: "Check Rust toolchain",
             });
             if (result.exitCode !== 0) {
-                throw new Error("failed to hydrate Rust library cache:\n" + (resultText(result) || "exit code " + result.exitCode));
+                throw new Error("preloaded Rust toolchain is not ready:\n" + (resultText(result) || "exit code " + result.exitCode));
             }
-            this.addLog("info", "Rust library cache ready for " + reason + ".");
+            this.addLog("info", "Rust toolchain ready for " + reason + ".");
         }
 
         private fetchedHashKey(): string {

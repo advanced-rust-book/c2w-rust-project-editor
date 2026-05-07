@@ -203,29 +203,12 @@ source_hash() {
         printf 'artifact=%s\n' "${artifact_kind}"
         printf 'chunk=%s\n' "${WASI_MAX_CHUNK}"
         printf 'c2w_flags=%s\n' "${C2W_EXTRA_FLAGS}"
-        if [ "${artifact_kind}" = "cargo-cache" ]; then
-            printf 'script_version=2026-05-06-rust-dev-cache-chunked-tar-export\n'
-        else
-            printf 'script_version=2026-05-05-rust-base-plus-cargo-cache\n'
-        fi
+        printf 'script_version=2026-05-06-single-expanded-reduced-rust-image\n'
         if command -v "${C2W}" >/dev/null 2>&1; then
             "${C2W}" --version 2>/dev/null || true
         fi
         while IFS= read -r -d '' file; do
             local rel="${file#"${image_dir}/"}"
-            if [ "${artifact_kind}" = "image" ]; then
-                case "${rel}" in
-                    Dockerfile.cache|c2w-rust-prebundle/*)
-                        continue
-                        ;;
-                esac
-            elif [ "${artifact_kind}" = "cargo-cache" ]; then
-                case "${rel}" in
-                    Dockerfile|hydrate-rust-cache.sh)
-                        continue
-                        ;;
-                esac
-            fi
             printf 'file=%s\n' "${rel}"
             sha256sum "${file}"
         done < <(find "${image_dir}" -type f -print0 | sort -z)
@@ -250,7 +233,6 @@ cleanup_removed_images() {
     local image
     for image in ${IMAGES}; do
         keep_prefixes+=("${image}-container")
-        keep_prefixes+=("${image}-cargo-cache")
     done
 
     local candidates=()
@@ -259,10 +241,6 @@ cleanup_removed_images() {
         "${DEST}"/*-container*.wasm
         "${DEST}"/*-container.manifest.json
         "${DEST}"/.*-container.sha256
-        "${DEST}"/*-cargo-cache.tar.gz
-        "${DEST}"/*-cargo-cache*.tar.gz.part
-        "${DEST}"/*-cargo-cache.manifest.json
-        "${DEST}"/.*-cargo-cache.sha256
     )
     shopt -u nullglob
 
@@ -372,106 +350,6 @@ build_wasi_image() {
     echo "Built ${#chunk_paths[@]} chunk(s) for ${output_name} into ${DEST}"
 }
 
-build_cargo_cache_asset() {
-    local image_name="$1"
-    local image_dir="$2"
-    local output_name="$3"
-    local target_arch="$4"
-    local hash="$5"
-    local dockerfile="${image_dir}/Dockerfile.cache"
-    local hash_file="${DEST}/.${output_name}.sha256"
-    local manifest_file="${DEST}/${output_name}.manifest.json"
-    local archive_file="${DEST}/${output_name}.tar.gz"
-    local chunk_prefix="${DEST}/${output_name}"
-    local tmp_root="${DEST}/.${output_name}.$$"
-    local tmp_output="${tmp_root}/rootfs"
-    local tmp_archive="${DEST}/.${output_name}.$$.tar.gz"
-    local exported_archive="${tmp_output}/rust-dev-cache.tar.gz"
-
-    if [ ! -f "${dockerfile}" ]; then
-        echo "No Rust development cache Dockerfile for ${image_name}; skipping cache asset"
-        return 0
-    fi
-
-    if [ "${FORCE_REBUILD}" != "1" ] \
-        && [ -f "${hash_file}" ] \
-        && [ "$(cat "${hash_file}")" = "${hash}" ] \
-        && [ -f "${manifest_file}" ] \
-        && compgen -G "${chunk_prefix}*.tar.gz.part" >/dev/null; then
-        echo "Skipping ${output_name}; cache inputs unchanged and chunked archive already exists in ${DEST}"
-        return 0
-    fi
-
-    echo "Building Rust development cache asset ${output_name}..."
-    rm -rf "${tmp_root}" "${tmp_archive}" "${archive_file}" "${manifest_file}" "${hash_file}" "${chunk_prefix}"*.tar.gz.part
-    mkdir -p "${tmp_output}"
-
-    "${DOCKER}" buildx build \
-        --progress=plain \
-        --platform="linux/${target_arch}" \
-        -f "${dockerfile}" \
-        --target export \
-        --output "type=local,dest=${tmp_output}" \
-        "${image_dir}"
-
-    if [ -f "${exported_archive}" ]; then
-        mv "${exported_archive}" "${tmp_archive}"
-    else
-        tar -C "${tmp_output}" -czf "${tmp_archive}" .
-    fi
-    rm -rf "${tmp_root}"
-
-    local archive_sha
-    local archive_bytes
-    local generated_at
-    archive_sha="$(sha256sum "${tmp_archive}" | awk '{print $1}')"
-    archive_bytes="$(wc -c < "${tmp_archive}" | tr -d '[:space:]')"
-    generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-
-    split -d -b "${WASI_MAX_CHUNK}" --additional-suffix=.tar.gz.part "${tmp_archive}" "${chunk_prefix}"
-    rm -f "${tmp_archive}"
-
-    local chunk_paths=()
-    shopt -s nullglob
-    chunk_paths=("${chunk_prefix}"*.tar.gz.part)
-    shopt -u nullglob
-    if [ "${#chunk_paths[@]}" -eq 0 ]; then
-        echo "split did not create any chunks for ${output_name}"
-        exit 1
-    fi
-    mapfile -t chunk_paths < <(printf '%s\n' "${chunk_paths[@]}" | sort)
-
-    {
-        printf '{\n'
-        printf '  "name": "%s",\n' "${output_name}"
-        printf '  "source": "%s",\n' "${image_name}"
-        printf '  "target": "cargo-cache",\n'
-        printf '  "arch": "%s",\n' "${target_arch}"
-        printf '  "format": "tar.gz",\n'
-        printf '  "chunkSize": "%s",\n' "${WASI_MAX_CHUNK}"
-        printf '  "chunks": %s,\n' "${#chunk_paths[@]}"
-        printf '  "sourceHash": "%s",\n' "${hash}"
-        printf '  "archiveHash": "%s",\n' "${archive_sha}"
-        printf '  "bytes": %s,\n' "${archive_bytes}"
-        printf '  "generatedAt": "%s",\n' "${generated_at}"
-        printf '  "files": [\n'
-        local idx
-        for idx in "${!chunk_paths[@]}"; do
-            local file_name
-            local comma=","
-            file_name="$(basename "${chunk_paths[${idx}]}")"
-            if [ "${idx}" -eq "$((${#chunk_paths[@]} - 1))" ]; then
-                comma=""
-            fi
-            printf '    "%s"%s\n' "${file_name}" "${comma}"
-        done
-        printf '  ]\n'
-        printf '}\n'
-    } > "${manifest_file}"
-    printf '%s\n' "${hash}" > "${hash_file}"
-    echo "Built Rust development cache asset ${output_name} as ${#chunk_paths[@]} chunk(s) (${archive_bytes} bytes)"
-}
-
 trap cleanup_docker_save_compat EXIT
 setup_docker_save_compat
 setup_buildx_builder
@@ -488,10 +366,7 @@ for image_name in ${IMAGES}; do
     target="$(read_trimmed_file "${image_dir}/target" "wasi")"
     target_arch="$(read_trimmed_file "${image_dir}/arch" "amd64")"
     output_name="${image_name}-container"
-    cache_output_name="${image_name}-cargo-cache"
     image_hash="$(source_hash "${image_dir}" "${image_name}" "${target_arch}" "${target}" "image")"
-    cache_hash="$(source_hash "${image_dir}" "${image_name}" "${target_arch}" "${target}" "cargo-cache")"
 
-    build_cargo_cache_asset "${image_name}" "${image_dir}" "${cache_output_name}" "${target_arch}" "${cache_hash}"
     build_wasi_image "${image_name}" "${image_dir}" "${output_name}" "${target_arch}" "${target}" "${image_hash}"
 done

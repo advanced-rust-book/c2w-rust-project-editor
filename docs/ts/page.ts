@@ -158,21 +158,25 @@ function startWasiFromManifest(
 
 async function fetchContainerManifest(manifestFileName: string, statusElem: HTMLElement | null): Promise<ContainerManifest> {
     const request = new Request(manifestFileName, { credentials: "same-origin" });
-    const cache = await openOptionalCache("c2w-container-manifests-v1");
-    const cached = await cache?.match(request);
-    if (cached) {
-        if (statusElem) {
-            statusElem.textContent = "Using cached container manifest.";
-        }
-        return cached.json() as Promise<ContainerManifest>;
-    }
+    const cache = await openOptionalCache("c2w-container-manifests-v2");
 
-    const resp = await fetch(request, { cache: "no-store" });
-    if (!resp.ok) {
-        throw new Error("failed to load " + manifestFileName + ": HTTP " + resp.status);
+    try {
+        const resp = await fetch(request, { cache: "no-store" });
+        if (!resp.ok) {
+            throw new Error("failed to load " + manifestFileName + ": HTTP " + resp.status);
+        }
+        await cache?.put(request, resp.clone());
+        return resp.json() as Promise<ContainerManifest>;
+    } catch (error) {
+        const cached = await cache?.match(request);
+        if (cached) {
+            if (statusElem) {
+                statusElem.textContent = "Using cached container manifest because the latest manifest could not be fetched.";
+            }
+            return cached.json() as Promise<ContainerManifest>;
+        }
+        throw error;
     }
-    await cache?.put(request, resp.clone());
-    return resp.json() as Promise<ContainerManifest>;
 }
 
 async function openOptionalCache(name: string): Promise<Cache | null> {
@@ -217,9 +221,11 @@ function startWasi(
 
     const xterm = new Terminal({
         convertEol: true,
+        cursorBlink: true,
         scrollback: 20000,
     });
     xterm.open(container);
+    container.addEventListener("pointerdown", focusActiveWasiTerminal);
 
     const { master, slave } = openpty();
     activeWasiInputReady = false;
@@ -227,12 +233,6 @@ function startWasi(
     registerPtyOutputCapture(master);
     activeWasiTerminal = { xterm, master, slave };
     window.activeWasiTerminal = activeWasiTerminal;
-
-    const termios = slave.ioctl("TCGETS");
-    termios.iflag &= ~(ISTRIP | INLCR | IGNCR | ICRNL | IXON);
-    termios.oflag &= ~OPOST;
-    termios.lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-    slave.ioctl("TCSETS", new Termios(termios.iflag, termios.oflag, termios.cflag, termios.lflag, termios.cc));
 
     xterm.loadAddon(master);
     if (typeof xterm.focus === "function") {
@@ -272,12 +272,16 @@ function startWasi(
     }
 }
 
+function focusActiveWasiTerminal(): void {
+    window.activeWasiTerminal?.xterm.focus?.();
+}
+
 function sendWasiInput(data: string): boolean {
     if (!activeWasiInputReady || !activeWasiTerminal?.xterm) {
         return false;
     }
 
-    if (writeDirectlyToPty(activeWasiTerminal.master, data)) {
+    if (writeDirectlyToPty(activeWasiTerminal, data)) {
         return true;
     }
 
@@ -299,18 +303,33 @@ function sendWasiInput(data: string): boolean {
     return false;
 }
 
-function writeDirectlyToPty(master: PtyMaster, data: string): boolean {
-    const writer = master.ldisc?.writeFromLower;
+function writeDirectlyToPty(terminal: ActiveWasiTerminal, data: string): boolean {
+    const writer = terminal.master.ldisc?.writeFromLower;
     if (typeof writer !== "function") {
         return false;
     }
 
+    const originalTermios = terminal.slave.ioctl("TCGETS");
     try {
-        writer.call(master.ldisc, data);
+        const rawTermios = new Termios(
+            originalTermios.iflag & ~(ISTRIP | INLCR | IGNCR | ICRNL | IXON),
+            originalTermios.oflag & ~OPOST,
+            originalTermios.cflag,
+            originalTermios.lflag & ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN),
+            originalTermios.cc
+        );
+        terminal.slave.ioctl("TCSETS", rawTermios);
+        writer.call(terminal.master.ldisc, data);
         return true;
     } catch (error) {
         console.warn("failed to write to WASI pty directly:", error);
         return false;
+    } finally {
+        try {
+            terminal.slave.ioctl("TCSETS", originalTermios);
+        } catch (error) {
+            console.warn("failed to restore interactive WASI pty mode:", error);
+        }
     }
 }
 

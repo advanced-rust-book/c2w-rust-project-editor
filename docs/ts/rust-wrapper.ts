@@ -208,7 +208,7 @@ class RustContainerWrapper {
 
     ensureLibraryCache(options: RustLibraryCacheOptions = {}): Promise<RustCommandResult> {
         if (!this.libraryCachePromise || options.force) {
-            this.libraryCachePromise = this.hydrateLibraryCache(options)
+            this.libraryCachePromise = this.checkLibraryCache(options)
                 .then((result) => {
                     if (result.exitCode !== 0) {
                         this.libraryCachePromise = undefined;
@@ -890,19 +890,19 @@ class RustContainerWrapper {
     private async ensureLibraryCacheSucceeded(): Promise<void> {
         const result = await this.ensureLibraryCache();
         if (result.exitCode !== 0) {
-            throw new Error("failed to hydrate Rust library cache:\n" + (result.stderr || result.stdout || result.rawOutput));
+            throw new Error("Rust library cache is not ready:\n" + (result.stderr || result.stdout || result.rawOutput));
         }
     }
 
-    private hydrateLibraryCache(options: RustLibraryCacheOptions): Promise<RustCommandResult> {
-        const url = options.url || RustContainerWrapper.defaultLibraryCacheUrl();
-        const cacheKey = options.cacheKey || RustContainerWrapper.defaultLibraryCacheKey(url);
-        const command = RustContainerWrapper.libraryCacheHydrateCommand(url, cacheKey);
+    private checkLibraryCache(options: RustLibraryCacheOptions): Promise<RustCommandResult> {
+        const url = options.url !== undefined ? options.url : RustContainerWrapper.defaultLibraryCacheUrl();
+        const cacheKey = options.cacheKey !== undefined ? options.cacheKey : RustContainerWrapper.defaultLibraryCacheKey(url);
+        const command = RustContainerWrapper.libraryCacheCheckCommand(url, cacheKey);
         return this.execWithStartupRetry(command, {
             ...options,
-            status: options.status || "Hydrating Rust library cache",
-            terminalTitle: options.terminalTitle || "Hydrate Rust library cache",
-            displayCommand: options.displayCommand || "hydrate Rust library cache",
+            status: options.status || "Checking preloaded Rust toolchain",
+            terminalTitle: options.terminalTitle || "Check Rust toolchain",
+            displayCommand: options.displayCommand || "check preloaded Rust toolchain",
             timeoutMs: options.timeoutMs ?? 900000,
             streamOutput: options.streamOutput ?? true,
         }, options.startupTimeoutMs ?? 900000);
@@ -1539,7 +1539,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if (!RustContainerWrapper.isTerminalStartupError(error) || Date.now() >= deadline) {
                     throw error;
                 }
-                this.emitStatus("Waiting for the Rust terminal before hydrating the library cache...");
+                this.emitStatus("Waiting for the Rust terminal before checking the preloaded toolchain...");
                 await RustContainerWrapper.sleep(Math.min(2500, Math.max(500, this.pollIntervalMs * attempts)));
             }
         } while (Date.now() < deadline);
@@ -2565,92 +2565,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "SSL_CERT_FILE=" + RustContainerWrapper.shellQuote(proxyCert),
             "GIT_SSL_CAINFO=" + RustContainerWrapper.shellQuote(proxyCert),
             "CARGO_HTTP_CAINFO=" + RustContainerWrapper.shellQuote(proxyCert),
-            "CARGO_NET_GIT_FETCH_WITH_CLI=true",
             "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse",
         ].join(" ");
     }
 
     private static defaultLibraryCacheUrl(): string {
-        const params = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
-        if (typeof window !== "undefined" && window.c2wRustLibraryCacheUrl) {
+        if (typeof window !== "undefined" && window.c2wRustLibraryCacheUrl !== undefined) {
             return window.c2wRustLibraryCacheUrl;
         }
-
-        const assetFile = "amd64-debian-wasi-cargo-cache.manifest.json";
-        const releaseOverride = params.get("releaseTag");
-        const releaseTag = releaseOverride && releaseOverride.trim()
-            ? releaseOverride.trim()
-            : typeof window !== "undefined" && window.c2wRustReleaseTag
-            ? window.c2wRustReleaseTag
-            : "1.0.3";
-        if (typeof document !== "undefined" && document.baseURI) {
-            return new URL("./release-assets/" + encodeURIComponent(releaseTag) + "/" + assetFile, document.baseURI).href;
-        }
-        return "https://github.com/advanced-rust-book/c2w-rust-project-editor/releases/download/"
-            + encodeURIComponent(releaseTag)
-            + "/" + assetFile;
+        return "";
     }
 
     private static defaultLibraryCacheKey(url: string): string {
         if (typeof window !== "undefined" && window.c2wRustLibraryCacheKey) {
             return window.c2wRustLibraryCacheKey;
         }
-        return url;
+        return url || "preloaded-rust-dev-image";
     }
 
-    private static libraryCacheHydrateCommand(url: string, cacheKey: string): string {
+    private static libraryCacheCheckCommand(url: string, cacheKey: string): string {
         const qUrl = RustContainerWrapper.shellQuote(url);
         const qCacheKey = RustContainerWrapper.shellQuote(cacheKey);
         return [
             "set -e",
-            "if command -v hydrate-rust-cache >/dev/null 2>&1 && grep -q 'download_chunked_archive' \"$(command -v hydrate-rust-cache)\" 2>/dev/null; then",
-            "    hydrate-rust-cache " + qUrl + " " + qCacheKey,
-            "else",
-            "    tmp_dir=$(mktemp -d /tmp/c2w-rust-cache.XXXXXX)",
-            "    trap 'rm -rf \"$tmp_dir\"' EXIT",
-            "    archive=\"$tmp_dir/rust-dev-cache.tar.gz\"",
-            "    manifest=\"$tmp_dir/rust-dev-cache.manifest.json\"",
-            "    curl_fetch() { curl -fL --retry 6 --retry-all-errors --retry-delay 2 --retry-max-time 300 --connect-timeout 30 --no-progress-meter \"$1\" -o \"$2\"; }",
-            "    manifest_string() { sed -n \"s/.*\\\"$1\\\"[[:space:]]*:[[:space:]]*\\\"\\\\([^\\\"]*\\\\)\\\".*/\\\\1/p\" \"$manifest\" | sed -n '1p'; }",
-            "    manifest_number() { sed -n \"s/.*\\\"$1\\\"[[:space:]]*:[[:space:]]*\\\\([0-9][0-9]*\\\\).*/\\\\1/p\" \"$manifest\" | sed -n '1p'; }",
-            "    case " + qUrl + " in",
-            "        *.manifest.json)",
-            "            printf 'hydrate-rust-cache fallback: downloading manifest %s\\n' " + qUrl,
-            "            curl_fetch " + qUrl + " \"$manifest\"",
-            "            base_url=" + qUrl,
-            "            base_url=\"${base_url%/*}/\"",
-            "            expected_hash=$(manifest_string archiveHash)",
-            "            expected_bytes=$(manifest_number bytes)",
-            "            files=$(sed -n '/\"files\"[[:space:]]*:/,/\\]/{ s/.*\"\\([^\"]*\\)\".*/\\1/p }' \"$manifest\")",
-            "            if [ -z \"$files\" ]; then printf 'hydrate-rust-cache fallback: manifest does not list cache chunks\\n' >&2; exit 1; fi",
-            "            : > \"$archive\"",
-            "            part_index=0",
-            "            while IFS= read -r file; do",
-            "                [ -n \"$file\" ] || continue",
-            "                case \"$file\" in /*|*://*|*..*) printf 'hydrate-rust-cache fallback: refusing unsafe manifest file entry: %s\\n' \"$file\" >&2; exit 1 ;; esac",
-            "                part_index=$((part_index + 1))",
-            "                part=\"$tmp_dir/cache-part-$part_index\"",
-            "                printf 'hydrate-rust-cache fallback: downloading cache chunk %s: %s\\n' \"$part_index\" \"$file\"",
-            "                curl_fetch \"${base_url}${file}\" \"$part\"",
-            "                cat \"$part\" >> \"$archive\"",
-            "                rm -f \"$part\"",
-            "            done <<EOF",
-            "$files",
-            "EOF",
-            "            actual_bytes=$(wc -c < \"$archive\" | tr -d '[:space:]')",
-            "            if [ -n \"$expected_bytes\" ] && [ \"$actual_bytes\" != \"$expected_bytes\" ]; then printf 'hydrate-rust-cache fallback: assembled archive size mismatch: expected %s, got %s\\n' \"$expected_bytes\" \"$actual_bytes\" >&2; exit 1; fi",
-            "            if [ -n \"$expected_hash\" ]; then actual_hash=$(sha256sum \"$archive\" | awk '{print $1}'); if [ \"$actual_hash\" != \"$expected_hash\" ]; then printf 'hydrate-rust-cache fallback: assembled archive sha256 mismatch: expected %s, got %s\\n' \"$expected_hash\" \"$actual_hash\" >&2; exit 1; fi; fi",
-            "            ;;",
-            "        *)",
-            "            printf 'hydrate-rust-cache fallback: downloading %s\\n' " + qUrl,
-            "            curl_fetch " + qUrl + " \"$archive\"",
-            "            ;;",
-            "    esac",
-            "    printf 'hydrate-rust-cache fallback: unpacking Rust development cache\\n'",
-            "    tar -xzf \"$archive\" -C /",
-            "    mkdir -p /usr/local/cargo/.c2w-cache",
-            "    printf '%s\\n' " + qCacheKey + " > /usr/local/cargo/.c2w-cache/rust-dev-cache.stamp",
+            "if [ -n " + qUrl + " ]; then",
+            "    printf 'External Rust cache archives are disabled for this c2w image: %s\\n' " + qUrl + " >&2",
+            "    exit 1",
             "fi",
+            "__rust_toolchain_waited=0",
+            "__rust_toolchain_notice=0",
+            "while ! command -v rustc >/dev/null 2>&1 || ! command -v cargo >/dev/null 2>&1 || ! command -v wasm-bindgen >/dev/null 2>&1; do",
+            "    if [ \"$__rust_toolchain_notice\" -eq 0 ]; then",
+            "        printf 'Waiting for c2w Rust toolchain to finish starting...\\n'",
+            "        __rust_toolchain_notice=1",
+            "    fi",
+            "    if [ \"$__rust_toolchain_waited\" -ge 300 ]; then",
+            "        printf 'Rust development tools are missing from this c2w image after waiting for startup.\\n' >&2",
+            "        printf 'PATH=%s\\n' \"$PATH\" >&2",
+            "        printf 'Available /usr/local entries:\\n' >&2",
+            "        ls -la /usr/local >&2 || true",
+            "        exit 1",
+            "    fi",
+            "    sleep 2",
+            "    __rust_toolchain_waited=$((__rust_toolchain_waited + 2))",
+            "done",
+            "printf 'Rust development tools are already present in this c2w image\\n'",
+            "mkdir -p /usr/local/cargo/.c2w-cache",
+            "printf '%s\\n' " + qCacheKey + " > /usr/local/cargo/.c2w-cache/rust-dev-cache.stamp",
         ].join("\n");
     }
 

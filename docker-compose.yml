@@ -62,25 +62,13 @@ services:
       - |
         set -eu
         sed -i 's/^#\(LoadModule headers_module modules\/mod_headers.so\)/\1/' /usr/local/apache2/conf/httpd.conf
-        sed -i 's/^#\(LoadModule proxy_module modules\/mod_proxy.so\)/\1/' /usr/local/apache2/conf/httpd.conf
-        sed -i 's/^#\(LoadModule proxy_http_module modules\/mod_proxy_http.so\)/\1/' /usr/local/apache2/conf/httpd.conf
-        sed -i 's/^#\(LoadModule socache_shmcb_module modules\/mod_socache_shmcb.so\)/\1/' /usr/local/apache2/conf/httpd.conf
-        sed -i 's/^#\(LoadModule ssl_module modules\/mod_ssl.so\)/\1/' /usr/local/apache2/conf/httpd.conf
         cat > /usr/local/apache2/conf/extra/container2wasm.conf <<'EOF'
         ServerName localhost
-        SSLSessionCache "shmcb:/usr/local/apache2/logs/ssl_scache(512000)"
         AddType application/wasm .wasm
-        SSLProxyEngine On
-        ProxyRequests Off
-        ProxyPass "/release-assets/" "https://github.com/advanced-rust-book/c2w-rust-project-editor/releases/download/" retry=0
-        ProxyPassReverse "/release-assets/" "https://github.com/advanced-rust-book/c2w-rust-project-editor/releases/download/"
-        ProxyPass "/release-asset-blobs/" "https://release-assets.githubusercontent.com/" retry=0
-        ProxyPassReverse "/release-asset-blobs/" "https://release-assets.githubusercontent.com/"
         <IfModule headers_module>
             Header always set Cross-Origin-Opener-Policy "same-origin"
             Header always set Cross-Origin-Embedder-Policy "credentialless"
             Header always set Cross-Origin-Resource-Policy "cross-origin"
-            Header edit Location "^https://release-assets.githubusercontent.com/" "/release-asset-blobs/"
         </IfModule>
         EOF
         if ! grep -q 'container2wasm.conf' /usr/local/apache2/conf/httpd.conf; then

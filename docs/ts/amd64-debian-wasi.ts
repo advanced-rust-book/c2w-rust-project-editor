@@ -1198,24 +1198,31 @@ refreshRuntimeMountStatus();
 const runtimeSearch = effectiveRuntimeSearch();
 const workerUrl = new URL("./dist/worker.js" + runtimeSearch, document.baseURI).href;
 const RELEASE_ASSET_TAG = releaseAssetTag();
-const CARGO_CACHE_MANIFEST_FILE = "amd64-debian-wasi-cargo-cache.manifest.json";
 const RELEASE_ASSET_BASE = releaseAssetBaseUrl();
 const imagePrefix = new URL("amd64-debian-wasi-container", RELEASE_ASSET_BASE).href;
 const manifestUrl = new URL("amd64-debian-wasi-container.manifest.json", RELEASE_ASSET_BASE).href;
-const cargoCacheManifestUrl = new URL(CARGO_CACHE_MANIFEST_FILE, RELEASE_ASSET_BASE).href;
 
 function releaseAssetBaseUrl(): string {
-    return new URL("./release-assets/" + RELEASE_ASSET_TAG + "/", document.baseURI).href;
+    const params = new URLSearchParams(location.search);
+    const override = params.get("assetBase") || params.get("releaseAssetBase");
+    if (override && override.trim()) {
+        return new URL(ensureTrailingSlash(override.trim()), document.baseURI).href;
+    }
+    return new URL("./containers/", document.baseURI).href;
+}
+
+function ensureTrailingSlash(value: string): string {
+    return value.endsWith("/") ? value : value + "/";
 }
 
 function releaseAssetTag(): string {
     const override = new URLSearchParams(location.search).get("releaseTag");
-    return override && override.trim() ? override.trim() : "1.0.3";
+    return override && override.trim() ? override.trim() : "1.0.4";
 }
 
 window.c2wRustReleaseTag = RELEASE_ASSET_TAG;
-window.c2wRustLibraryCacheUrl = cargoCacheManifestUrl;
-window.c2wRustLibraryCacheKey = RELEASE_ASSET_TAG + ":" + CARGO_CACHE_MANIFEST_FILE;
+window.c2wRustLibraryCacheUrl = "";
+window.c2wRustLibraryCacheKey = "preloaded-rust-dev-image";
 
 if (typeof window.startWasiFromManifest === "function") {
     window.startWasiFromManifest("terminal-amd64-debian", workerUrl, imagePrefix, manifestUrl);

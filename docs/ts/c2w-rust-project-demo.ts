@@ -141,7 +141,7 @@ fn main() {
 `;
 
 let lastActiveProjectEditorId = "";
-let demoLibraryCacheHydrationStarted = false;
+let demoLibraryCacheCheckStarted = false;
 
 function setupEditorThemeToggle(): void {
     const shell = document.getElementById("editor-demo-shell");
@@ -190,27 +190,27 @@ function demoRuntime(): RustContainerWrapper {
     return runtime;
 }
 
-function startDemoLibraryCacheHydration(runtime: RustContainerWrapper): void {
-    if (demoLibraryCacheHydrationStarted) {
+function startDemoLibraryCacheCheck(runtime: RustContainerWrapper): void {
+    if (demoLibraryCacheCheckStarted) {
         return;
     }
-    demoLibraryCacheHydrationStarted = true;
+    demoLibraryCacheCheckStarted = true;
 
     void runtime.ensureLibraryCache({
-        status: "Hydrating cached Rust libraries",
-        displayCommand: "hydrate Rust library cache",
-        terminalTitle: "Hydrate Rust library cache",
+        status: "Checking preloaded Rust toolchain",
+        displayCommand: "check preloaded Rust toolchain",
+        terminalTitle: "Check Rust toolchain",
     }).then((result) => {
         if (result.exitCode === 0) {
-            demoSetWrapperStatus("Rust library cache is ready.");
+            demoSetWrapperStatus("Preloaded Rust toolchain is ready.");
         } else {
-            demoSetWrapperStatus("Rust library cache hydration failed.", true);
-            demoRenderResult("hydrate Rust library cache", result);
+            demoSetWrapperStatus("Preloaded Rust toolchain check failed.", true);
+            demoRenderResult("check preloaded Rust toolchain", result);
         }
     }).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        demoSetWrapperStatus("Rust library cache hydration failed: " + message, true);
-        demoAppendOutput("ERROR hydrating Rust library cache: " + message + "\n");
+        demoSetWrapperStatus("Preloaded Rust toolchain check failed: " + message, true);
+        demoAppendOutput("ERROR checking preloaded Rust toolchain: " + message + "\n");
     });
 }
 
@@ -224,7 +224,7 @@ function createRustProjectEditorDemo(): void {
     }
 
     const runtime = demoRuntime();
-    window.addEventListener("c2w-wasi-image-ready", () => startDemoLibraryCacheHydration(runtime), { once: true });
+    window.addEventListener("c2w-wasi-image-ready", () => startDemoLibraryCacheCheck(runtime), { once: true });
     const terminal = new C2WRustEditor.SharedTerminalBridge({
         statusElement: "#terminal-target-status",
         onStatus: (message, isError) => {

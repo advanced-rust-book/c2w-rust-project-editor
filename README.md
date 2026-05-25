@@ -19,7 +19,7 @@ That command builds the TypeScript browser assets, serves the static experience 
 - `assets`: uses `node:22-alpine`, installs the local TypeScript toolchain, and emits browser JavaScript into `docs/dist`.
 - `runner`: uses `httpd:2.4-alpine`, serves `docs/`, and injects the cross-origin isolation headers required by the browser WASI runtime.
 
-The optional `builder` service is behind the `local-image` profile. It regenerates the self-contained c2w chunks in `docs/containers`.
+The optional `builder` service is behind the `local-image` profile. It regenerates the c2w browser runtime artifacts in `docs/containers`.
 
 The running page is `docs/index.html`. It mounts two independent Cargo project editors plus a bottom debug terminal panel that share one Rust container runtime and one terminal bridge. Each editor can write `Cargo.toml`, `src/lib.rs`, and `src/main.rs` into its own container folder, fetch cached dependencies, compile with Cargo, run the binary, show compiler diagnostics, and export the complete project as a zip.
 
@@ -28,12 +28,12 @@ The running page is `docs/index.html`. It mounts two independent Cargo project e
 After a successful release build, the useful delivery payload is:
 
 - `docs/dist/`: compiled browser runtime, project editor, worker, WASI, and wrapper scripts.
-- `docs/containers/amd64-debian-wasi-container.manifest.json` plus the split `amd64-debian-wasi-container*.wasm` runtime chunks. The image contains the Rust toolchain, Cargo cache, and helper tools directly in the filesystem.
+- `docs/containers/amd64-debian-wasi-container.manifest.json` plus the generated c2w runtime artifacts. The default local build now uses `c2w --to-js --build-arg LOAD_MODE=separated --build-arg VM_MEMORY_SIZE_MB=2047 --build-arg QEMU_MIGRATION=false`, so the browser payload is emitted under `docs/containers/amd64-debian-wasi-container/`.
 - `docs/src/c2w-net-proxy.wasm`: network proxy asset used by container2wasm.
 - `docs/extras/` and `docs/src/browser_wasi_shim/`: supporting WASI assets.
 - `docs/index.html`: static demo page that wires the runtime and editor together.
 
-At runtime, the worker downloads the self-contained image chunks progressively, reports chunk-level progress in the status strip, stores chunks in Cache Storage, and reuses cached chunks on reload. There is no runtime Rust cache archive: the wrapper only checks that `rustc`, `cargo`, and `wasm-bindgen` are already present in the c2w image.
+At runtime, the default manifest points the app at `docs/emscripten.html`, which loads the generated separated c2w JavaScript, wasm, and data files. There is no runtime Rust cache archive: the wrapper only checks that `rustc`, `cargo`, and `wasm-bindgen` are already present in the c2w image.
 
 The default browser URL for the image payload is same-origin `./containers/`, so the `docs/` folder can be served by any static web server. You can override the asset directory with `?assetBase=<url-or-relative-path>`.
 
@@ -98,13 +98,31 @@ $env:HTTP_PORT = "8090"
 docker compose up --build
 ```
 
-Regenerate WASM container chunks locally:
+Regenerate c2w browser runtime artifacts locally:
 
 ```powershell
 $env:COMPOSE_PROFILES = "local-image"
 $env:FORCE_REBUILD = "1"
 docker compose up --build builder
 ```
+
+The default builder flags are:
+
+```text
+--to-js --build-arg LOAD_MODE=separated --build-arg VM_MEMORY_SIZE_MB=2047 --build-arg QEMU_MIGRATION=false
+```
+
+Set `C2W_EXTRA_FLAGS` to a non-empty value to override them for a one-off build.
+The generated c2w Dockerfile is patched so QEMU's Emscripten build uses
+`-sINITIAL_MEMORY=512MB -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB` instead of
+the fixed `-sTOTAL_MEMORY` heap. The browser QEMU build still rejects exactly
+`2048M`, so the default guest RAM is `2047M`. Migration is disabled because
+c2w's separated output does not emit the `vm.state` file referenced by the
+generated migration args.
+For local reliability, the JS conversion also patches c2w's helper build stages
+from Ubuntu to Debian by default because some networks fail DNS lookups for the
+Ubuntu archive hosts; set `C2W_PATCH_UBUNTU_BASES=0` to use c2w's embedded
+Dockerfile unchanged.
 
 Increase Buildx memory for a larger Docker Desktop or CI machine:
 
@@ -142,4 +160,4 @@ The container2wasm conversion can be memory-sensitive. If the hosted runner is t
 docker compose --profile local-image up --build --exit-code-from builder builder
 ```
 
-It then stages the generated `docs/containers` files, verifies that the runtime manifest/chunks exist, adds `SHA256SUMS.txt`, uploads a workflow artifact copy, and creates a GitHub Release containing the self-contained WASM runtime chunks.
+It then stages the generated `docs/containers` files, verifies that the runtime manifest and separated JS/wasm/data payload exist, adds `SHA256SUMS.txt`, uploads a workflow artifact copy, and creates a GitHub Release containing the browser runtime payload.

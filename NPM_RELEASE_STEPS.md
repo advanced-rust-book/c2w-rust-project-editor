@@ -24,9 +24,16 @@ package-root/
     coi-config.js
   containers/
     amd64-debian-wasi-container.manifest.json
-    amd64-debian-wasi-container00.wasm
-    ...
-    amd64-debian-wasi-container17.wasm
+    amd64-debian-wasi-container/
+      out.js
+      qemu-system-x86_64.wasm
+      arg-module.js
+      image.data
+      image-load.js
+      rootfs.data
+      rootfs-load.js
+      bios.data
+      bios-load.js
     .amd64-debian-wasi-container.sha256
   src/
     c2w-net-proxy.wasm
@@ -94,8 +101,21 @@ npm run typecheck
 npm run build
 ```
 
-For the larger prebundled Rust image, use the high-memory Buildx defaults from
-`docker-compose.yml` or override them explicitly:
+For the larger prebundled Rust image, the local builder defaults to c2w's
+Emscripten output with separated loads and a 2GB VM:
+
+```text
+--to-js --build-arg LOAD_MODE=separated --build-arg VM_MEMORY_SIZE_MB=2047 --build-arg QEMU_MIGRATION=false
+```
+
+The local Dockerfile patch changes QEMU's Emscripten flags from fixed
+`-sTOTAL_MEMORY` to `-sINITIAL_MEMORY=512MB -sALLOW_MEMORY_GROWTH=1
+-sMAXIMUM_MEMORY=4GB`. The browser QEMU build rejects exactly `2048M`, so the
+default guest RAM is `2047M`. Migration is disabled because c2w's separated
+output does not include `vm.state`.
+
+Use the high-memory Buildx defaults from `docker-compose.yml` or override them
+explicitly:
 
 ```powershell
 $env:C2W_BUILDX_MEMORY = "32g"
@@ -120,10 +140,12 @@ Test-Path docs\dist\worker.js
 Test-Path docs\dist\stack-worker.js
 Test-Path docs\src\c2w-net-proxy.wasm
 Test-Path docs\containers\amd64-debian-wasi-container.manifest.json
-Get-ChildItem docs\containers\amd64-debian-wasi-container*.wasm | Measure-Object
+Test-Path docs\containers\amd64-debian-wasi-container\out.js
+Test-Path docs\containers\amd64-debian-wasi-container\qemu-system-x86_64.wasm
 ```
 
-Expected image chunks for the current build: `amd64-debian-wasi-container00.wasm` through `amd64-debian-wasi-container17.wasm`.
+Expected image output for the default build is the generated
+`docs\containers\amd64-debian-wasi-container\` directory plus its manifest.
 
 To publish the generated container chunks as GitHub Release assets instead of
 copying them by hand, run the manual `Publish container files` workflow from the
@@ -177,7 +199,9 @@ Inspect the `npm pack --dry-run` file list. It must include:
 - `dist/worker.js`
 - `dist/stack-worker.js`
 - `containers/amd64-debian-wasi-container.manifest.json`
-- every `containers/amd64-debian-wasi-container*.wasm` chunk
+- `containers/amd64-debian-wasi-container/out.js`
+- `containers/amd64-debian-wasi-container/qemu-system-x86_64.wasm`
+- every generated `containers/amd64-debian-wasi-container/*.{data,js}` support file
 - `src/c2w-net-proxy.wasm`
 - `src/browser_wasi_shim/index.js`
 - `src/browser_wasi_shim/wasi_defs.js`
